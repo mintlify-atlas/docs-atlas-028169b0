@@ -1,14 +1,39 @@
 ---
-title: "REST API Reference: Employee User Management Endpoints"
+title: "Users API — Employee Profiles & RBAC Management"
 sidebarTitle: "Users"
-description: "Create, retrieve, and update employee profiles with full RBAC enforcement. Every endpoint requires a valid JWT bearer token and returns a UserRead object."
+description: "Create, list, and update employee profiles. Manage roles, departments, permissions, and security actions with full RBAC enforcement via JWT bearer auth."
 ---
 
-The Users API is the central registry for every person in your organisation. It lets authorised callers enumerate the workforce, onboard new employees, and update profile or status fields while the platform's role-based access-control layer automatically scopes what each caller may see or change.
+The Users API is the central registry for every person in your organisation. It lets authorised callers enumerate the workforce, onboard new employees, manage profile and status fields, and perform administrative security actions — all enforced by a role-based access-control layer that automatically scopes what each caller may see or change.
 
 <Note>
   All endpoints in this section are prefixed with `/api/v1/users` and require an `Authorization: Bearer <token>` header obtained from `POST /api/v1/auth/login`.
 </Note>
+
+---
+
+## Enum Reference
+
+### User Roles
+
+| Value | Description |
+|-------|-------------|
+| `admin` | Full system access. |
+| `hr_operations` | HR management access across all employees. |
+| `manager` | Manages a team; can approve leave and tasks. |
+| `team_lead` | Technical lead with partial management rights. |
+| `employee` | Standard employee. |
+| `junior_employee` | Junior-level employee. |
+| `intern` | Intern; task completion requires manager approval. |
+
+### User Status
+
+| Value | Description |
+|-------|-------------|
+| `active` | Account is active and can log in. |
+| `inactive` | Deactivated account. |
+| `suspended` | Temporarily suspended. |
+| `invited` | Invitation sent, account not yet activated. |
 
 ---
 
@@ -58,11 +83,18 @@ List all users visible to the authenticated caller. Results are automatically sc
     <ResponseField name="shift_name" type="string">Shift display name, e.g. `Morning Shift`.</ResponseField>
     <ResponseField name="shift_timing" type="string">Human-readable shift hours, e.g. `09:00 – 18:00`.</ResponseField>
     <ResponseField name="avatar_url" type="string">Profile picture URL.</ResponseField>
+    <ResponseField name="avatar_updated_at" type="datetime">Timestamp when the avatar was last changed.</ResponseField>
+    <ResponseField name="profile_picture_url" type="string">Alias for `avatar_url`; resolved by the server.</ResponseField>
+    <ResponseField name="profile_picture_updated_at" type="datetime">Alias for `avatar_updated_at`.</ResponseField>
+    <ResponseField name="profile_picture_content_type" type="string">MIME type of the stored profile picture.</ResponseField>
+    <ResponseField name="profile_picture_size" type="integer">File size in bytes of the stored profile picture.</ResponseField>
     <ResponseField name="presence_status" type="string">Real-time presence: `active` or `away`.</ResponseField>
+    <ResponseField name="presence_updated_at" type="datetime">Timestamp of the last presence update.</ResponseField>
+    <ResponseField name="last_seen_at" type="datetime">Timestamp of the user's last API activity.</ResponseField>
     <ResponseField name="online_state" type="string">`online` or `offline`.</ResponseField>
     <ResponseField name="is_online" type="boolean">Convenience flag derived from `online_state`.</ResponseField>
-    <ResponseField name="created_at" type="datetime">ISO-8601 account creation timestamp.</ResponseField>
-    <ResponseField name="updated_at" type="datetime">ISO-8601 last update timestamp.</ResponseField>
+    <ResponseField name="created_at" type="datetime" required>ISO-8601 account creation timestamp.</ResponseField>
+    <ResponseField name="updated_at" type="datetime" required>ISO-8601 last update timestamp.</ResponseField>
   </Expandable>
 </ResponseField>
 
@@ -140,7 +172,7 @@ Create a new user account and send an invitation email. The new user must activa
 </ResponseField>
 
 <Warning>
-  This endpoint is restricted to `admin` and `hr_operations` roles. Calling it with any other role returns `403 PERMISSION_ERROR`.
+  This endpoint is restricted to `admin` and `hr_operations` roles. Calling it with any other role returns `403 Forbidden`.
 </Warning>
 
 ```bash Example
@@ -156,6 +188,42 @@ curl -X POST "https://api.example.com/api/v1/users" \
     "designation": "Software Engineer",
     "manager_id": "f7e6d5c4-0000-0000-0000-000000000003"
   }'
+```
+
+---
+
+## GET /users/active-directory
+
+Return a minimal directory of users the authenticated caller may message, enriched with live presence and online-state data. Used to populate contact pickers in messaging UIs.
+
+**Auth:** Any authenticated user. Results are RBAC-scoped.
+
+### Response Fields
+
+<ResponseField name="[]" type="array">
+  Array of UserDirectoryRead objects.
+
+  <Expandable title="UserDirectoryRead">
+    <ResponseField name="id" type="uuid" required>User identifier.</ResponseField>
+    <ResponseField name="full_name" type="string" required>Display name.</ResponseField>
+    <ResponseField name="display_name" type="string">Alias for `full_name`.</ResponseField>
+    <ResponseField name="email" type="string">Work email address.</ResponseField>
+    <ResponseField name="role" type="string" required>User's role.</ResponseField>
+    <ResponseField name="department" type="string">Department name.</ResponseField>
+    <ResponseField name="department_name" type="string">Resolved department display name.</ResponseField>
+    <ResponseField name="avatar_url" type="string">Profile picture URL.</ResponseField>
+    <ResponseField name="profile_picture_url" type="string">Alias for `avatar_url`.</ResponseField>
+    <ResponseField name="presence_status" type="string">`active` or `away`.</ResponseField>
+    <ResponseField name="presence_updated_at" type="datetime">Timestamp of last presence change.</ResponseField>
+    <ResponseField name="last_seen_at" type="datetime">Timestamp of last API activity.</ResponseField>
+    <ResponseField name="online_state" type="string">`online` or `offline`.</ResponseField>
+    <ResponseField name="is_online" type="boolean">Convenience flag derived from `online_state`.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/users/active-directory" \
+  -H "Authorization: Bearer <token>"
 ```
 
 ---
@@ -177,7 +245,145 @@ curl -X GET "https://api.example.com/api/v1/users/me" \
 
 ---
 
-## GET /users/{id}
+## PATCH /users/me/presence
+
+Update the authenticated user's real-time presence status.
+
+**Auth:** Any authenticated user.
+
+### Request Body
+
+<ParamField body="presence_status" type="string" required>
+  New presence state. Must be `active` or `away`.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="presence_status" type="string" required>Updated presence state.</ResponseField>
+<ResponseField name="presence_updated_at" type="datetime">Timestamp of the change.</ResponseField>
+<ResponseField name="last_seen_at" type="datetime">Timestamp of last API activity.</ResponseField>
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/me/presence" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"presence_status": "away"}'
+```
+
+---
+
+## PATCH /users/me/profile
+
+Update the currently authenticated user's own profile details.
+
+**Auth:** Any authenticated user.
+
+### Request Body
+
+<ParamField body="full_name" type="string" required>
+  Updated display name. 1–255 characters.
+</ParamField>
+
+<ParamField body="phone" type="string">
+  Updated contact phone number. Max 50 characters.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object.
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/me/profile" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"full_name": "Ayesha R. Khan", "phone": "+92-300-1234567"}'
+```
+
+---
+
+## PATCH /users/me/profile-picture
+
+Upload a new profile picture for the authenticated user. Accepts a multipart/form-data request with a single `file` field.
+
+**Auth:** Any authenticated user.
+
+### Request Body
+
+<ParamField body="file" type="file" required>
+  Image file to upload (multipart/form-data). JPEG, PNG, and WebP are accepted.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object with `avatar_url` and `profile_picture_url` pointing to the new image.
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/me/profile-picture" \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@/path/to/photo.jpg"
+```
+
+---
+
+## DELETE /users/me/profile-picture
+
+Remove the authenticated user's profile picture, clearing all related fields.
+
+**Auth:** Any authenticated user.
+
+### Response Fields
+
+Returns the updated `UserRead` object with `avatar_url` set to `null`.
+
+```bash Example
+curl -X DELETE "https://api.example.com/api/v1/users/me/profile-picture" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## POST /users/me/change-password
+
+Change the authenticated user's own password. Requires the current password for verification.
+
+**Auth:** Any authenticated user.
+
+### Request Body
+
+<ParamField body="current_password" type="string" required>
+  The user's existing password for verification.
+</ParamField>
+
+<ParamField body="new_password" type="string" required>
+  The desired new password. Minimum 8 characters.
+</ParamField>
+
+<ParamField body="confirm_password" type="string" required>
+  Must match `new_password` exactly.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="message" type="string" required>Confirmation message on success.</ResponseField>
+
+<Warning>
+  Returns `400 Bad Request` if `current_password` is incorrect, if `new_password` and `confirm_password` do not match, or if the new password is identical to the current one.
+</Warning>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/users/me/change-password" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "current_password": "OldPass123!",
+    "new_password": "NewPass456!",
+    "confirm_password": "NewPass456!"
+  }'
+```
+
+---
+
+## GET /users/{user_id}
 
 Retrieve the profile of a specific user by their UUID. Access is subject to role-scoping: Employees can only view users within their own visibility boundary; Managers can view their reports; Admins and HR can view anyone.
 
@@ -185,7 +391,7 @@ Retrieve the profile of a specific user by their UUID. Access is subject to role
 
 ### Path Parameters
 
-<ParamField path="id" type="uuid" required>
+<ParamField path="user_id" type="uuid" required>
   UUID of the target user.
 </ParamField>
 
@@ -200,15 +406,15 @@ curl -X GET "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f
 
 ---
 
-## PATCH /users/{id}
+## PATCH /users/{user_id}
 
-Update a user's profile fields or account status. Callers may only update fields they are authorised to change: employees can update their own `full_name` and `phone`; Managers can update their direct reports; Admins and HR can update any field including `role` and `status`.
+Update a user's profile fields or account status. Callers may only update fields they are authorised to change: Employees can update their own `full_name` and `phone`; Managers can update their direct reports; Admins and HR can update any field including `role` and `status`.
 
 **Auth:** Any authenticated user. Write permissions are RBAC-enforced per field.
 
 ### Path Parameters
 
-<ParamField path="id" type="uuid" required>
+<ParamField path="user_id" type="uuid" required>
   UUID of the user to update.
 </ParamField>
 
@@ -254,10 +460,6 @@ Update a user's profile fields or account status. Callers may only update fields
 
 Returns the updated `UserRead` object.
 
-<Tip>
-  To change a user's password as an admin, use `POST /users/{id}/send-password-reset` which emails the user a secure reset link rather than accepting a raw password value.
-</Tip>
-
 ```bash Example
 curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6" \
   -H "Authorization: Bearer <token>" \
@@ -270,16 +472,670 @@ curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c96
 
 ---
 
+## DELETE /users/{user_id}
+
+Deactivate a user account. This is a soft deactivation — the record is retained for audit history.
+
+**Auth:** `admin` role required.
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the user to deactivate.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object with `status: "inactive"`.
+
+```bash Example
+curl -X DELETE "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## POST /users/{user_id}/suspend
+
+Temporarily suspend a user account, preventing login until the account is reactivated.
+
+**Auth:** `admin` role required.
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the user to suspend.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="reason" type="string">
+  Optional free-text reason for the suspension, stored in the audit log.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object with `status: "suspended"`.
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/suspend?reason=Policy+violation" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## POST /users/{user_id}/activate
+
+Reactivate a previously deactivated or suspended user account.
+
+**Auth:** Any authenticated user (RBAC-enforced server-side; typically `admin` or `hr_operations`).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the user to activate.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object with `status: "active"`.
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/activate" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## POST /users/{user_id}/resend-invite
+
+Resend the invitation / account-setup email to a user whose status is `invited`.
+
+**Auth:** `admin` or `manager` role required. Rate-limited.
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the invited user.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="message" type="string" required>Human-readable outcome message.</ResponseField>
+<ResponseField name="email_sent" type="boolean" required>`true` if the email was dispatched.</ResponseField>
+<ResponseField name="email_error" type="string">SMTP error detail when `email_sent` is `false`.</ResponseField>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/resend-invite" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## PATCH /users/{user_id}/profile-picture
+
+Upload a profile picture for any user. The caller must be the target user themselves, or hold `admin` or `hr_operations` role.
+
+**Auth:** Self, `admin`, or `hr_operations`.
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the user whose picture should be updated.
+</ParamField>
+
+### Request Body
+
+<ParamField body="file" type="file" required>
+  Image file (multipart/form-data). JPEG, PNG, or WebP.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object.
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/profile-picture" \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@/path/to/photo.jpg"
+```
+
+---
+
+## DELETE /users/{user_id}/profile-picture
+
+Remove a user's profile picture. The caller must be the target user or hold admin/HR role.
+
+**Auth:** Self, `admin`, or `hr_operations`.
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the user whose picture should be removed.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object with `avatar_url` set to `null`.
+
+```bash Example
+curl -X DELETE "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/profile-picture" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## GET /users/{user_id}/admin-profile
+
+Retrieve a 360° aggregated profile for an employee, including attendance, leave, tasks, time logs, projects, goals, and notes. Intended for the HR/admin employee-detail view.
+
+**Auth:** `admin` role required.
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the employee.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="start_date" type="string">
+  Start of the date range for sub-resource queries (ISO-8601 date string).
+</ParamField>
+
+<ParamField query="end_date" type="string">
+  End of the date range for sub-resource queries (ISO-8601 date string).
+</ParamField>
+
+<ParamField query="limit" type="integer">
+  Maximum number of records per sub-resource. Default: `50`.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="profile" type="UserRead" required>Full user profile.</ResponseField>
+<ResponseField name="attendance_summary" type="object" required>Aggregate attendance statistics for the selected period.</ResponseField>
+<ResponseField name="attendance_sessions" type="array" required>Recent attendance sessions.</ResponseField>
+<ResponseField name="breaks" type="array" required>Recent attendance break records.</ResponseField>
+<ResponseField name="leave_requests" type="array" required>Leave requests for the period.</ResponseField>
+<ResponseField name="eod_submissions" type="array" required>End-of-day report submissions.</ResponseField>
+<ResponseField name="tasks" type="array" required>Assigned tasks.</ResponseField>
+<ResponseField name="time_logs" type="array" required>Time log entries.</ResponseField>
+<ResponseField name="projects" type="array" required>Projects the employee is associated with.</ResponseField>
+<ResponseField name="goals" type="array" required>Personal development goals.</ResponseField>
+<ResponseField name="notes" type="array" required>Personal notes.</ResponseField>
+<ResponseField name="activity_timeline" type="array" required>Chronological activity events for the employee.</ResponseField>
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/admin-profile?limit=20" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## PATCH /users/{user_id}/role
+
+Change a user's role. RBAC rules govern which role transitions are permitted.
+
+**Auth:** Any authenticated user (RBAC-enforced; typically `admin` or `hr_operations`).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Request Body
+
+<ParamField body="role" type="string" required>
+  The new role. One of `admin`, `hr_operations`, `manager`, `team_lead`, `employee`, `junior_employee`, `intern`.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object.
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/role" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"role": "team_lead"}'
+```
+
+---
+
+## PATCH /users/{user_id}/department
+
+Update a user's department assignment and optional designation.
+
+**Auth:** Any authenticated user (RBAC-enforced).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Request Body
+
+<ParamField body="department_id" type="uuid">
+  UUID of the new department. Omit to leave unchanged.
+</ParamField>
+
+<ParamField body="designation" type="string">
+  Updated job title.
+</ParamField>
+
+<ParamField body="clear_department" type="boolean">
+  Set to `true` to remove the user from their current department. Default: `false`.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object.
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/department" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"department_id": "c1d2e3f4-0000-0000-0000-000000000005"}'
+```
+
+---
+
+## PATCH /users/{user_id}/department-details
+
+Update department, shift, manager, and designation in a single call. Intended for the admin employee-detail form.
+
+**Auth:** Any authenticated user (RBAC-enforced).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Request Body
+
+<ParamField body="department_id" type="uuid">
+  UUID of the new department.
+</ParamField>
+
+<ParamField body="shift_id" type="uuid">
+  UUID of the new work shift.
+</ParamField>
+
+<ParamField body="manager_id" type="uuid">
+  UUID of the new direct-line manager.
+</ParamField>
+
+<ParamField body="designation" type="string">
+  Updated job title.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object.
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/department-details" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "department_id": "c1d2e3f4-0000-0000-0000-000000000005",
+    "shift_id": "d4e5f6a7-0000-0000-0000-000000000004",
+    "manager_id": "f7e6d5c4-0000-0000-0000-000000000003",
+    "designation": "Senior Engineer"
+  }'
+```
+
+---
+
+## PATCH /users/{user_id}/status
+
+Directly set a user's account status.
+
+**Auth:** Any authenticated user (RBAC-enforced).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Request Body
+
+<ParamField body="status" type="string" required>
+  New account status: `active`, `inactive`, `suspended`, or `invited`.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object.
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/status" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "active"}'
+```
+
+---
+
+## PATCH /users/{user_id}/reporting
+
+Update a user's reporting line — manager, shift, and designation — with explicit control flags.
+
+**Auth:** Any authenticated user (RBAC-enforced).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Request Body
+
+<ParamField body="manager_id" type="uuid">
+  UUID of the new manager. Only applied when `update_manager` is `true`.
+</ParamField>
+
+<ParamField body="shift_id" type="uuid">
+  UUID of the new shift. Only applied when `update_shift` is `true`.
+</ParamField>
+
+<ParamField body="designation" type="string">
+  Updated job title.
+</ParamField>
+
+<ParamField body="update_manager" type="boolean">
+  Set to `true` to apply the `manager_id` change. Default: `false`.
+</ParamField>
+
+<ParamField body="update_shift" type="boolean">
+  Set to `true` to apply the `shift_id` change. Default: `false`.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object.
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/reporting" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "manager_id": "f7e6d5c4-0000-0000-0000-000000000003",
+    "update_manager": true,
+    "designation": "Tech Lead"
+  }'
+```
+
+---
+
+## PATCH /users/{user_id}/admin-profile
+
+Update an employee's core profile fields (name, email, phone, designation) from the admin panel.
+
+**Auth:** Any authenticated user (RBAC-enforced).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Request Body
+
+<ParamField body="full_name" type="string">
+  Updated display name. 1–255 characters.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Updated work email address.
+</ParamField>
+
+<ParamField body="phone" type="string">
+  Updated contact phone number. Max 50 characters.
+</ParamField>
+
+<ParamField body="designation" type="string">
+  Updated job title.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object.
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/admin-profile" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"full_name": "Ayesha Raza Khan", "designation": "Principal Engineer"}'
+```
+
+---
+
+## GET /users/{user_id}/permissions
+
+Retrieve the full permission breakdown for a user, showing role-granted permissions, extra grants, explicit denials, and the final resolved permission set.
+
+**Auth:** Any authenticated user (RBAC-enforced).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="user_id" type="uuid" required>User identifier.</ResponseField>
+<ResponseField name="role" type="string" required>User's current role.</ResponseField>
+<ResponseField name="role_permissions" type="array" required>Permissions granted by the user's role.</ResponseField>
+<ResponseField name="extra_permissions" type="array" required>Additional individually granted permissions.</ResponseField>
+<ResponseField name="denied_permissions" type="array" required>Permissions explicitly denied for this user.</ResponseField>
+<ResponseField name="resolved_permissions" type="array" required>Final effective permission list after applying grants and denials.</ResponseField>
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/permissions" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## PATCH /users/{user_id}/permissions
+
+Update a user's individual permission overrides — granting extra permissions above their role, or explicitly denying role-default permissions.
+
+**Auth:** Any authenticated user (RBAC-enforced; typically `admin`).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Request Body
+
+<ParamField body="extra_grants" type="array">
+  List of permission key strings to grant in addition to the role's defaults. Default: `[]`.
+</ParamField>
+
+<ParamField body="extra_denies" type="array">
+  List of permission key strings to explicitly deny regardless of role. Default: `[]`.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserPermissionsRead` object (same fields as `GET /users/{user_id}/permissions`).
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/permissions" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "extra_grants": ["analytics.view_team"],
+    "extra_denies": []
+  }'
+```
+
+---
+
+## POST /users/{user_id}/send-password-reset
+
+Send a password-reset link to the user's registered email address.
+
+**Auth:** Any authenticated user (RBAC-enforced). Rate-limited.
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the user who should receive the reset link.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="message" type="string" required>Confirmation message.</ResponseField>
+<ResponseField name="email_sent" type="boolean" required>`true` if the email was dispatched.</ResponseField>
+<ResponseField name="email_error" type="string">SMTP error detail when `email_sent` is `false`.</ResponseField>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/send-password-reset" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## POST /users/{user_id}/resend-invitation
+
+Resend the account-setup / invitation link (alias endpoint alongside `POST /users/{user_id}/resend-invite`).
+
+**Auth:** `admin` or `manager` role required. Rate-limited.
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the invited user.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="message" type="string" required>Outcome message.</ResponseField>
+<ResponseField name="email_sent" type="boolean" required>`true` if the email was dispatched.</ResponseField>
+<ResponseField name="email_error" type="string">SMTP error detail when `email_sent` is `false`.</ResponseField>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/resend-invitation" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## POST /users/{user_id}/force-password-reset
+
+Flag the user's account so they are forced to set a new password on their next login attempt.
+
+**Auth:** Any authenticated user (RBAC-enforced). Rate-limited.
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="message" type="string" required>Confirmation message.</ResponseField>
+<ResponseField name="email_sent" type="boolean" required>Whether a notification email was sent.</ResponseField>
+<ResponseField name="email_error" type="string">Error detail if notification email failed.</ResponseField>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/force-password-reset" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## GET /users/{user_id}/admin-summary
+
+Retrieve a compact activity summary for an employee, covering attendance, tasks, time logs, leave, projects, and EOD submissions. Optimised for quick-glance dashboard tiles.
+
+**Auth:** Any authenticated user (RBAC-enforced).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the employee.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="user_id" type="uuid" required>Employee identifier.</ResponseField>
+<ResponseField name="attendance" type="object" required>Attendance aggregate statistics.</ResponseField>
+<ResponseField name="tasks" type="object" required>Task count statistics by status.</ResponseField>
+<ResponseField name="time_logs" type="object" required>Time tracking aggregate statistics.</ResponseField>
+<ResponseField name="leave" type="object" required>Leave request statistics.</ResponseField>
+<ResponseField name="projects" type="object" required>Project involvement statistics.</ResponseField>
+<ResponseField name="eod" type="object" required>EOD submission statistics.</ResponseField>
+<ResponseField name="last_activity" type="string">ISO-8601 timestamp of the most recent activity.</ResponseField>
+<ResponseField name="account_created_at" type="datetime" required>When the account was created.</ResponseField>
+<ResponseField name="last_login" type="string">ISO-8601 timestamp of the last login, or `null`.</ResponseField>
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/admin-summary" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## GET /users/{user_id}/audit-logs
+
+Retrieve the audit history for a user, listing every admin action taken on or by the account.
+
+**Auth:** Any authenticated user (RBAC-enforced).
+
+### Path Parameters
+
+<ParamField path="user_id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="limit" type="integer">
+  Number of log entries to return. Range: 1–500. Default: `100`.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="[]" type="array">
+  Array of audit log entries.
+
+  <Expandable title="UserAuditLogRead">
+    <ResponseField name="id" type="uuid" required>Unique log entry identifier.</ResponseField>
+    <ResponseField name="action_type" type="string" required>Machine-readable action identifier, e.g. `user.role_changed`.</ResponseField>
+    <ResponseField name="actor_user_id" type="uuid" required>UUID of the user who performed the action.</ResponseField>
+    <ResponseField name="actor_name" type="string">Display name of the actor.</ResponseField>
+    <ResponseField name="old_value" type="object">State before the change.</ResponseField>
+    <ResponseField name="new_value" type="object">State after the change.</ResponseField>
+    <ResponseField name="created_at" type="datetime" required>Timestamp of the action.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6/audit-logs?limit=25" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
 ## Standard Error Response
 
 ```json
 {
-  "error": {
-    "code": "PERMISSION_ERROR",
-    "message": "You do not have permission to update this user.",
-    "details": []
-  }
+  "detail": "You do not have permission to perform this action."
 }
 ```
 
-Common error codes for this resource: `AUTH_ERROR`, `PERMISSION_ERROR`, `NOT_FOUND`, `CONFLICT`.
+Common HTTP status codes for this resource: `400 Bad Request`, `401 Unauthorized`, `403 Forbidden`, `404 Not Found`, `409 Conflict`.

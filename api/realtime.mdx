@@ -1,7 +1,7 @@
 ---
-title: "WebSocket, Presence, Notifications, and Messaging APIs"
+title: "WebSocket, Presence, Notifications & Meetings REST API"
 sidebarTitle: "Realtime"
-description: "Connect over WebSocket with a single-use ticket, track live presence state, manage in-app notifications, send messages, and schedule meetings with realtime push events."
+description: "Connect over WebSocket with a single-use ticket, track live presence, manage in-app and push notifications, and schedule meetings."
 ---
 
 The realtime layer of the Workforce Intelligence OS combines a persistent WebSocket channel with REST endpoints that write to and read from that same event pipeline. Every connected client receives server-initiated events — new messages, meeting invites, presence changes, notification counts — without polling. All REST paths are prefixed with `/api/v1`. The WebSocket endpoint lives at `/api/v1/ws`.
@@ -254,6 +254,12 @@ Explicitly marks a specific device session as offline. Call this on intentional 
   `"web"` or `"mobile"`.
 </ParamField>
 
+<ResponseField name="online_state" type="string">Will be `"offline"` after a successful call.</ResponseField>
+<ResponseField name="is_online" type="boolean">Always `false`.</ResponseField>
+<ResponseField name="presence_status" type="string">User-set status label.</ResponseField>
+<ResponseField name="last_seen_at" type="string | null">ISO-8601 UTC timestamp of the final heartbeat.</ResponseField>
+<ResponseField name="platforms" type="array">Remaining active platforms after this device goes offline.</ResponseField>
+
 ---
 
 ### `GET /api/v1/presence/users`
@@ -272,7 +278,8 @@ Batch-fetches the online presence state for a set of users by UUID. Useful for r
     <ResponseField name="online_state" type="string">`online`, `away`, or `offline`.</ResponseField>
     <ResponseField name="is_online" type="boolean" />
     <ResponseField name="presence_status" type="string">User-set status label, e.g. `"active"`, `"busy"`, `"do_not_disturb"`.</ResponseField>
-    <ResponseField name="last_seen_at" type="string | null">ISO-8601 UTC.</ResponseField>
+    <ResponseField name="presence_updated_at" type="string | null">ISO-8601 UTC when presence status was last changed.</ResponseField>
+    <ResponseField name="last_seen_at" type="string | null">ISO-8601 UTC of last heartbeat.</ResponseField>
     <ResponseField name="platforms" type="array">Active platforms.</ResponseField>
   </Expandable>
 </ResponseField>
@@ -315,6 +322,26 @@ Returns up to `limit` notifications for the authenticated user, ordered newest-f
 
 ---
 
+### `GET /api/v1/notifications/unread-count`
+
+Returns the count of unread notifications for the authenticated user.
+
+**Auth:** Any authenticated user.
+
+<ResponseField name="count" type="integer">Number of unread notifications.</ResponseField>
+
+---
+
+### `PATCH /api/v1/notifications/read-all`
+
+Marks all unread notifications for the authenticated user as read and emits a `notifications_count_updated` WebSocket event.
+
+**Auth:** Any authenticated user.
+
+<ResponseField name="message" type="string">Confirmation message.</ResponseField>
+
+---
+
 ### `PATCH /api/v1/notifications/{notification_id}/read`
 
 Marks a specific notification as read and emits a `notification_read` WebSocket event.
@@ -325,23 +352,166 @@ Marks a specific notification as read and emits a `notification_read` WebSocket 
   UUID of the notification.
 </ParamField>
 
----
-
-### `PATCH /api/v1/notifications/read-all`
-
-Marks all unread notifications for the authenticated user as read and emits a `notifications_count_updated` WebSocket event.
-
-**Auth:** Any authenticated user.
+<ResponseField name="id" type="string" />
+<ResponseField name="is_read" type="boolean">Always `true` after a successful call.</ResponseField>
+<ResponseField name="read_at" type="string">ISO-8601 UTC timestamp set at read time.</ResponseField>
 
 ---
 
-### `GET /api/v1/notifications/unread-count`
+## Notification Preferences & Push Delivery
 
-Returns the count of unread notifications.
+The notification preferences system allows users to control which notification categories they receive and via which channels (in-app, email, web push, mobile push).
+
+### `GET /api/v1/notifications/preferences`
+
+Returns the authenticated user's notification preferences.
 
 **Auth:** Any authenticated user.
 
-<ResponseField name="count" type="integer">Number of unread notifications.</ResponseField>
+<ResponseField name="user_id" type="string">UUID of the user.</ResponseField>
+<ResponseField name="email_notifications" type="boolean">Whether email delivery is enabled.</ResponseField>
+<ResponseField name="push_notifications" type="boolean">Whether push delivery is enabled.</ResponseField>
+
+---
+
+### `PATCH /api/v1/notifications/preferences`
+
+Update the authenticated user's notification preferences. Only provided fields are changed.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="email_notifications" type="boolean">Enable or disable email notification delivery.</ParamField>
+<ParamField body="push_notifications" type="boolean">Enable or disable push notification delivery.</ParamField>
+
+---
+
+### `GET /api/v1/notifications/push-public-key`
+
+Returns the server's VAPID public key for Web Push subscription registration.
+
+**Auth:** None required.
+
+<ResponseField name="public_key" type="string | null">VAPID public key string, or `null` if Web Push is not configured on this server.</ResponseField>
+<ResponseField name="configured" type="boolean">Whether VAPID credentials are configured on the server.</ResponseField>
+
+---
+
+### `POST /api/v1/notifications/push-subscriptions`
+
+Registers a browser Web Push subscription for the authenticated user. If a subscription with the same endpoint already exists it is updated in place.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="endpoint" type="string" required>
+  Browser Push Service endpoint URL.
+</ParamField>
+
+<ParamField body="p256dh" type="string" required>
+  Client public key for payload encryption.
+</ParamField>
+
+<ParamField body="auth" type="string" required>
+  Auth secret for payload encryption.
+</ParamField>
+
+<ParamField body="user_agent" type="string">
+  Optional browser user-agent string for identification.
+</ParamField>
+
+<ResponseField name="message" type="string">Confirmation — `"Push subscription registered."` or `"Push subscription updated."`</ResponseField>
+
+<Note>
+  Returns `503 Service Unavailable` if VAPID credentials are not configured on the server.
+</Note>
+
+---
+
+### `DELETE /api/v1/notifications/push-subscriptions`
+
+Revokes (soft-deletes) a Web Push subscription. The request body uses the same schema as the registration endpoint.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="endpoint" type="string" required>
+  Endpoint URL of the subscription to revoke.
+</ParamField>
+
+<ParamField body="p256dh" type="string" required>Client public key.</ParamField>
+<ParamField body="auth" type="string" required>Auth secret.</ParamField>
+
+<ResponseField name="message" type="string">Always `"Push subscription removed."` on success.</ResponseField>
+
+---
+
+### `POST /api/v1/notifications/push/test`
+
+Sends a test Web Push notification to all active browser subscriptions for the authenticated user.
+
+**Auth:** Any authenticated user.
+
+<ResponseField name="configured" type="boolean">Whether VAPID is configured.</ResponseField>
+<ResponseField name="message" type="string">Human-readable outcome description.</ResponseField>
+<ResponseField name="subscriptions" type="integer">Number of active subscriptions found.</ResponseField>
+<ResponseField name="attempted" type="integer">Number of push attempts made.</ResponseField>
+<ResponseField name="sent" type="integer">Number of successful deliveries.</ResponseField>
+<ResponseField name="failed" type="integer">Number of failed deliveries.</ResponseField>
+
+---
+
+## Mobile Push Device Tokens
+
+### `POST /api/v1/notifications/device-tokens`
+
+Registers or refreshes the current user's Expo push token for mobile push delivery. If the token is already registered to another user it is reassigned.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="expo_push_token" type="string" required>
+  Expo push token string in `ExponentPushToken[...]` or `ExpoPushToken[...]` format.
+</ParamField>
+
+<ParamField body="platform" type="string">
+  `"android"` or `"ios"`. Any other value is stored as `"unknown"`.
+</ParamField>
+
+<ParamField body="device_name" type="string">Human-readable device name.</ParamField>
+<ParamField body="device_id" type="string">Stable device identifier.</ParamField>
+<ParamField body="app_version" type="string">App version string.</ParamField>
+<ParamField body="build_version" type="string">App build number.</ParamField>
+<ParamField body="environment" type="string">One of `development`, `preview`, `production`. Defaults to `development`.</ParamField>
+
+<ResponseField name="id" type="string">UUID of the device token record.</ResponseField>
+<ResponseField name="expo_push_token" type="string" />
+<ResponseField name="platform" type="string" />
+<ResponseField name="is_active" type="boolean">Always `true` after successful registration.</ResponseField>
+
+---
+
+### `DELETE /api/v1/notifications/device-tokens/current`
+
+Deactivates the current user's active device token(s) on logout. If `expo_push_token` is provided in the body, only that specific token is revoked; otherwise all active tokens for the user are revoked.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="expo_push_token" type="string">
+  Specific token to revoke. Omit to revoke all active tokens for the user.
+</ParamField>
+
+<ResponseField name="message" type="string">Always `"Device token unregistered."` on success.</ResponseField>
+
+---
+
+### `DELETE /api/v1/notifications/device-tokens/{token_id}`
+
+Deactivates a specific device token by UUID. The token must be owned by the authenticated user.
+
+**Auth:** Any authenticated user. Must own the token.
+
+<ParamField path="token_id" type="string" required>
+  UUID of the device token record to revoke.
+</ParamField>
+
+<ResponseField name="message" type="string">Always `"Device token unregistered."` on success.</ResponseField>
 
 ---
 
@@ -566,23 +736,13 @@ Creates a new meeting and sends invitations to all specified participants. The o
 
 ---
 
-### `POST /api/v1/meetings/{meeting_id}/respond`
-
-RSVP to a meeting invitation.
-
-**Auth:** Must be a participant.
-
-<ParamField body="response_status" type="string" required>
-  One of: `accepted`, `declined`, `tentative`.
-</ParamField>
-
----
-
 ### `GET /api/v1/meetings/upcoming`
 
 Returns future scheduled meetings for the authenticated user, ordered by start time ascending.
 
 **Auth:** Any authenticated user.
+
+<ResponseField name="[]" type="array">Array of `MeetingRead` objects with `status = "scheduled"` and `start_at >= now`.</ResponseField>
 
 ---
 
@@ -592,6 +752,71 @@ Returns all meetings scheduled for today in the `Asia/Karachi` timezone.
 
 **Auth:** Any authenticated user. Pass `scope=all` for Admin/HR to see all org meetings.
 
+<ParamField query="scope" type="string">
+  Pass `all` to retrieve all org meetings today (Admin/HR only).
+</ParamField>
+
+---
+
+### `GET /api/v1/meetings/{meeting_id}`
+
+Returns details of a single meeting. The caller must be the organiser, a participant, or an Admin/HR user.
+
+**Auth:** Any authenticated user with access to the meeting.
+
+<ParamField path="meeting_id" type="string" required>
+  UUID of the meeting.
+</ParamField>
+
+<ResponseField name="id" type="string">UUID of the meeting.</ResponseField>
+<ResponseField name="title" type="string" />
+<ResponseField name="organizer_id" type="string" />
+<ResponseField name="start_at" type="string">ISO-8601 UTC datetime.</ResponseField>
+<ResponseField name="end_at" type="string">ISO-8601 UTC datetime.</ResponseField>
+<ResponseField name="status" type="string">`scheduled` or `cancelled`.</ResponseField>
+
+---
+
+### `POST /api/v1/meetings/{meeting_id}/cancel`
+
+Cancels a meeting, setting its status to `"cancelled"`. Sends `meeting_deleted` WebSocket events and in-app notifications to all participants.
+
+**Auth:** Meeting organiser or `ADMIN` role required.
+
+<ParamField path="meeting_id" type="string" required>
+  UUID of the meeting to cancel.
+</ParamField>
+
+<ResponseField name="id" type="string" />
+<ResponseField name="status" type="string">Always `"cancelled"` after a successful call.</ResponseField>
+
+<Warning>
+  Cancelled meetings cannot be reopened via the API. Participants will receive a `meeting_deleted` WebSocket event and an in-app notification.
+</Warning>
+
+---
+
+### `POST /api/v1/meetings/{meeting_id}/respond`
+
+RSVP to a meeting invitation.
+
+**Auth:** Must be a participant.
+
+<ParamField path="meeting_id" type="string" required>
+  UUID of the meeting.
+</ParamField>
+
+<ParamField body="response_status" type="string" required>
+  One of: `accepted`, `declined`, `tentative`.
+</ParamField>
+
+<ResponseField name="id" type="string">UUID of the updated meeting.</ResponseField>
+<ResponseField name="status" type="string">Meeting status (unchanged by RSVP).</ResponseField>
+
+<Note>
+  Responding to a cancelled meeting returns `400 Bad Request`. A `meeting_rsvp_updated` WebSocket event is emitted to the organiser on every RSVP update.
+</Note>
+
 ---
 
 ## Error Reference
@@ -599,7 +824,8 @@ Returns all meetings scheduled for today in the `Asia/Karachi` timezone.
 | HTTP Status | Error Code | Reason |
 |---|---|---|
 | `401` | `AUTH_ERROR` | Missing or invalid JWT |
-| `403` | `PERMISSION_ERROR` | Not a participant or insufficient role |
-| `404` | `NOT_FOUND` | Conversation, message, or meeting not found |
+| `403` | `PERMISSION_ERROR` | Not a participant, not the organiser, or insufficient role |
+| `404` | `NOT_FOUND` | Conversation, message, notification, or meeting not found |
+| `503` | `SERVICE_UNAVAILABLE` | Web Push not configured (VAPID missing) |
 | `1008` (WS) | — | WS ticket missing, invalid, expired, or user inactive |
 | `1011` (WS) | — | Internal server error during WS setup |

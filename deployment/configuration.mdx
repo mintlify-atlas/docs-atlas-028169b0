@@ -1,5 +1,5 @@
 ---
-title: "Environment Variables and Configuration Reference"
+title: "Workforce OS Environment Variables Configuration Guide"
 sidebarTitle: "Configuration"
 description: "Complete reference for every environment variable in Workforce OS, grouped by concern, with types, defaults, and usage notes for Railway and local dev."
 ---
@@ -138,6 +138,7 @@ The backend seeds a default admin user on first startup if the email does not al
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `CALL_RECORDINGS_STORAGE_DRIVER` | `string` | `local` | Storage driver for call recording uploads. Accepted: `local`, `s3`, `railway_bucket`, `railway`. `railway_bucket` and `railway` are aliases for `s3`. |
+| `CALL_RECORDINGS_LOCAL_DIR` | `string` | `storage/call-recordings` | Local filesystem path for call recording files when using the `local` driver. Use a mounted Railway volume or switch to `s3` for persistent production storage. |
 | `CALL_RECORDINGS_MAX_UPLOAD_MB` | `integer` | `100` | Maximum upload size for a single call recording file, in megabytes. |
 
 ---
@@ -154,6 +155,7 @@ Used for call recordings and profile images when the storage driver is set to `s
 | `AWS_SECRET_ACCESS_KEY` | `S3_SECRET_ACCESS_KEY` | `string` | S3 secret key. |
 | `S3_REGION` | `AWS_DEFAULT_REGION` | `string` | Region. Defaults to `auto` when unset (suitable for Cloudflare R2). |
 | `S3_URL_STYLE` | `AWS_S3_URL_STYLE` | `string` | URL style: `virtual` or `path`. Defaults to `virtual`. |
+| `S3_PUBLIC_BASE_URL` | — | `string` | Optional public base URL for generating direct links to objects in the bucket (e.g. a CDN prefix). When unset, the API constructs URLs from `S3_ENDPOINT_URL` and `S3_BUCKET`. |
 
 ---
 
@@ -161,11 +163,14 @@ Used for call recordings and profile images when the storage driver is set to `s
 
 Web Push is optional. If all three `VAPID_*` variables are set, the API enables browser push notifications. If any one is missing, delivery stays disabled and a safe warning is logged.
 
-| Variable | Type | Description |
-|---|---|---|
-| `VAPID_PUBLIC_KEY` | `string` | VAPID public key for browser push subscriptions. Generate with `npx web-push generate-vapid-keys`. |
-| `VAPID_PRIVATE_KEY` | `string` | VAPID private key. **API service only** — never set on the Frontend service. |
-| `VAPID_SUBJECT` | `string` | Contact URI in the VAPID header, e.g. `mailto:admin@example.com`. |
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `PUSH_NOTIFICATIONS_ENABLED` | `boolean` | `True` | Master switch for the push-notification subsystem. Set to `False` to disable all outbound push delivery without removing VAPID keys. |
+| `EXPO_PUSH_API_URL` | `string` | `https://exp.host/--/api/v2/push/send` | Expo push gateway URL. Only relevant if the mobile (Capacitor/Expo) push path is active. Change only if self-hosting the Expo push service. |
+| `PUSH_NOTIFICATION_MESSAGE_PREVIEW_ENABLED` | `boolean` | `True` | When `True`, notification payloads include a truncated message preview. Set to `False` to send title-only notifications for privacy. |
+| `VAPID_PUBLIC_KEY` | `string` | *(none)* | VAPID public key for browser push subscriptions. Generate with `npx web-push generate-vapid-keys`. |
+| `VAPID_PRIVATE_KEY` | `string` | *(none)* | VAPID private key. **API service only** — never set on the Frontend service. |
+| `VAPID_SUBJECT` | `string` | *(none)* | Contact URI in the VAPID header, e.g. `mailto:admin@example.com`. |
 
 <Note>
   Do **not** set `NEXT_PUBLIC_VAPID_PUBLIC_KEY` on the web service. The browser fetches the public key dynamically from `GET /api/v1/notifications/push-public-key`.

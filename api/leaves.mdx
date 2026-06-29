@@ -1,10 +1,10 @@
 ---
-title: "REST API Endpoints for Employee Leave and WFH Requests"
+title: "Leaves API — Leave, WFH, and Half-Day Requests"
 sidebarTitle: "Leaves"
-description: "Submit, list, and resolve sick, casual, annual, WFH, and half-day requests through a multi-stage approval workflow with full escalation support."
+description: "Submit, list, and resolve sick, casual, annual, WFH, and half-day requests through a multi-stage approval workflow with escalation and timeline history."
 ---
 
-The Leaves API handles the full lifecycle of employee time-off requests — from initial submission by the employee, through manager review and resolution, to optional escalation for HR oversight. Results are automatically scoped by the caller's role so that employees only see their own requests, managers see their team's queue, and admins see everything.
+The Leaves API handles the full lifecycle of employee time-off requests — from initial submission by the employee, through manager review and resolution, to optional escalation for HR oversight. Results are automatically scoped by the caller's role so that employees see only their own requests, managers see their team's queue, and admins see everything.
 
 <Note>
   All endpoints are prefixed with `/api/v1/leaves` and require an `Authorization: Bearer <token>` header. Dates are plain `YYYY-MM-DD` strings; timestamps are ISO-8601 UTC.
@@ -12,19 +12,19 @@ The Leaves API handles the full lifecycle of employee time-off requests — from
 
 ---
 
-## Leave Type Values
+## Enum Reference
 
-<ResponseField name="leave_type" type="enum">
-  | Value | Description |
-  |-------|-------------|
-  | `sick` | Medical or health-related absence. |
-  | `casual` | Short personal leave for everyday matters. |
-  | `annual` | Pre-planned annual leave entitlement. |
-  | `half_day` | Either the first or second half of a working day. Requires `is_half_day: true` and a `half_day_period`. |
-  | `wfh` | Work-from-home day tracked through the leave system. |
-</ResponseField>
+### Leave Type
 
-## Leave Status Values
+| Value | Description |
+|-------|-------------|
+| `sick` | Medical or health-related absence. |
+| `casual` | Short personal leave for everyday matters. |
+| `annual` | Pre-planned annual leave entitlement. |
+| `half_day` | Either the first or second half of a working day. Set `is_half_day: true` and supply `half_day_period`. |
+| `wfh` | Work-from-home day tracked through the leave system. |
+
+### Leave Status
 
 | Value | Description |
 |-------|-------------|
@@ -33,42 +33,24 @@ The Leaves API handles the full lifecycle of employee time-off requests — from
 | `rejected` | Declined; `manager_comment` contains the reason. |
 | `escalated` | Escalated to a senior approver. |
 | `cancelled` | Cancelled by the submitting employee. |
-| `needs_clarification` | Approver requested more detail from the employee. |
+| `needs_clarification` | Approver has requested more detail from the employee. |
 
----
+### Half-Day Period
 
-## GET /leaves
+| Value | Description |
+|-------|-------------|
+| `first_half` | Morning half of the working day. |
+| `second_half` | Afternoon half of the working day. |
 
-List leave requests visible to the authenticated caller. Admins and HR see all requests; Managers see requests belonging to their direct reports; Employees see only their own records.
+### Approval Action (for resolve)
 
-**Auth:** Any authenticated user. Results are RBAC-scoped automatically.
-
-### Response Fields
-
-Returns an array of `LeaveRequestRead` objects.
-
-<ResponseField name="id" type="uuid" required>Unique request identifier.</ResponseField>
-<ResponseField name="user_id" type="uuid" required>UUID of the employee who submitted the request.</ResponseField>
-<ResponseField name="user_full_name" type="string">Resolved display name of the requesting employee.</ResponseField>
-<ResponseField name="start_date" type="date" required>First day of the requested leave (`YYYY-MM-DD`).</ResponseField>
-<ResponseField name="end_date" type="date" required>Last day of the requested leave (`YYYY-MM-DD`).</ResponseField>
-<ResponseField name="leave_type" type="string" required>One of the leave type enum values listed above.</ResponseField>
-<ResponseField name="status" type="string" required>Current request status (see status table above).</ResponseField>
-<ResponseField name="is_half_day" type="boolean" required>`true` when the request covers only half a working day.</ResponseField>
-<ResponseField name="half_day_period" type="string">Which half: `first_half` or `second_half`. Present only when `is_half_day` is `true`.</ResponseField>
-<ResponseField name="reason" type="string" required>Employee-supplied explanation for the request.</ResponseField>
-<ResponseField name="manager_comment" type="string">Reviewer's note attached during resolution; required when rejecting.</ResponseField>
-<ResponseField name="current_approver_id" type="uuid">UUID of the user whose action is currently awaited.</ResponseField>
-<ResponseField name="escalated_from_id" type="uuid">UUID of the approver the request was escalated from.</ResponseField>
-<ResponseField name="escalated_at" type="datetime">Timestamp of escalation, if applicable.</ResponseField>
-<ResponseField name="escalation_count" type="integer">Number of times this request has been escalated.</ResponseField>
-<ResponseField name="created_at" type="datetime" required>ISO-8601 UTC submission timestamp.</ResponseField>
-<ResponseField name="updated_at" type="datetime" required>ISO-8601 UTC last-update timestamp.</ResponseField>
-
-```bash Example
-curl -X GET "https://api.example.com/api/v1/leaves" \
-  -H "Authorization: Bearer <token>"
-```
+| Value | Description |
+|-------|-------------|
+| `approved` | Grant the request. |
+| `rejected` | Decline the request. A `manager_comment` is required. |
+| `escalated` | Escalate to the next approver. A `manager_comment` is required. |
+| `cancelled` | Cancel the request (used by the approver to withdraw). |
+| `clarified` | Mark that clarification has been provided. |
 
 ---
 
@@ -93,7 +75,7 @@ Submit a new leave, WFH, or half-day request. The system routes the request to t
 </ParamField>
 
 <ParamField body="reason" type="string" required>
-  Explanation for the request. Required by approval workflow.
+  Explanation for the request. Required by the approval workflow.
 </ParamField>
 
 <ParamField body="is_half_day" type="boolean">
@@ -108,8 +90,26 @@ Submit a new leave, WFH, or half-day request. The system routes the request to t
 
 Returns the newly created `LeaveRequestRead` object with `status: "pending"` and `current_approver_id` pointing to the employee's manager.
 
+<ResponseField name="id" type="uuid" required>Unique request identifier.</ResponseField>
+<ResponseField name="user_id" type="uuid" required>UUID of the employee who submitted the request.</ResponseField>
+<ResponseField name="user_full_name" type="string">Resolved display name of the requesting employee.</ResponseField>
+<ResponseField name="start_date" type="date" required>First day of the requested leave (`YYYY-MM-DD`).</ResponseField>
+<ResponseField name="end_date" type="date" required>Last day of the requested leave (`YYYY-MM-DD`).</ResponseField>
+<ResponseField name="leave_type" type="string" required>One of the leave type enum values listed above.</ResponseField>
+<ResponseField name="status" type="string" required>Current request status (see status table above).</ResponseField>
+<ResponseField name="is_half_day" type="boolean" required>`true` when the request covers only half a working day.</ResponseField>
+<ResponseField name="half_day_period" type="string">Which half: `first_half` or `second_half`. Present only when `is_half_day` is `true`.</ResponseField>
+<ResponseField name="reason" type="string" required>Employee-supplied explanation for the request.</ResponseField>
+<ResponseField name="manager_comment" type="string">Reviewer's note attached during resolution; required when rejecting or escalating.</ResponseField>
+<ResponseField name="current_approver_id" type="uuid">UUID of the user whose action is currently awaited.</ResponseField>
+<ResponseField name="escalated_from_id" type="uuid">UUID of the approver the request was escalated from.</ResponseField>
+<ResponseField name="escalated_at" type="datetime">Timestamp of escalation, if applicable.</ResponseField>
+<ResponseField name="escalation_count" type="integer">Number of times this request has been escalated.</ResponseField>
+<ResponseField name="created_at" type="datetime" required>ISO-8601 UTC submission timestamp.</ResponseField>
+<ResponseField name="updated_at" type="datetime" required>ISO-8601 UTC last-update timestamp.</ResponseField>
+
 <Warning>
-  The `start_date` must not be after `end_date`. For single-day requests, set both to the same date. Violating this constraint returns a `400 VALIDATION_ERROR`.
+  `start_date` must not be after `end_date`. For single-day requests, set both to the same date. Violating this constraint returns `400 Bad Request`.
 </Warning>
 
 ```bash Example — Full-day sick leave
@@ -124,7 +124,7 @@ curl -X POST "https://api.example.com/api/v1/leaves" \
   }'
 ```
 
-```bash Example — Half-day WFH
+```bash Example — Half-day
 curl -X POST "https://api.example.com/api/v1/leaves" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
@@ -140,18 +140,35 @@ curl -X POST "https://api.example.com/api/v1/leaves" \
 
 ---
 
+## GET /leaves/me
+
+Retrieve the authenticated employee's own leave request history, ordered by submission date descending.
+
+**Auth:** Any authenticated user.
+
+### Response Fields
+
+Returns an array of `LeaveRequestRead` objects. See [POST /leaves](#post-leaves) for the full field list.
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/leaves/me" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
 ## GET /leaves/pending
 
-Return the list of leave requests currently awaiting the authenticated user's approval action. This endpoint is the primary data source for a manager's or HR admin's approval inbox.
+Return the list of leave requests currently awaiting the authenticated user's approval action. This is the primary data source for a manager's or HR admin's approval inbox.
 
-**Auth:** Any authenticated user. Only returns requests where `current_approver_id` matches the caller's UUID.
+**Auth:** Any authenticated user. Returns only requests where `current_approver_id` matches the caller's UUID.
 
 ### Response Fields
 
 Returns an array of `LeaveRequestRead` objects with `status: "pending"` or `status: "needs_clarification"`.
 
 <Tip>
-  Poll this endpoint periodically or listen to the system's notification webhooks to keep your approval UI badge count accurate.
+  Poll this endpoint periodically or listen to notification events to keep your approval UI badge count accurate.
 </Tip>
 
 ```bash Example
@@ -161,15 +178,15 @@ curl -X GET "https://api.example.com/api/v1/leaves/pending" \
 
 ---
 
-## PATCH /leaves/{id}/resolve
+## PATCH /leaves/{request_id}/resolve
 
-Approve or reject a pending leave request. The caller must be the `current_approver_id` on the request, or hold an `admin` or `hr_operations` role. Employees cannot approve their own requests.
+Approve, reject, escalate, or take another action on a pending leave request. The caller must be the `current_approver_id` on the request, or hold an `admin` or `hr_operations` role. Employees cannot approve their own requests.
 
 **Auth:** Manager, Team Lead, Admin, or HR Operations. Self-approval is explicitly blocked.
 
 ### Path Parameters
 
-<ParamField path="id" type="uuid" required>
+<ParamField path="request_id" type="uuid" required>
   UUID of the leave request to resolve.
 </ParamField>
 
@@ -180,7 +197,7 @@ Approve or reject a pending leave request. The caller must be the `current_appro
 </ParamField>
 
 <ParamField body="manager_comment" type="string">
-  Reviewer note. **Required** when `action` is `rejected` or `escalated`; optional for approvals.
+  Reviewer note. **Required** when `action` is `rejected` or `escalated`; optional for other actions.
 </ParamField>
 
 ### Response Fields
@@ -188,7 +205,7 @@ Approve or reject a pending leave request. The caller must be the `current_appro
 Returns the updated `LeaveRequestRead` with the new `status` and `manager_comment`.
 
 <Warning>
-  Attempting to resolve a request you do not own (i.e., you are not `current_approver_id`) and you are not `admin`/`hr_operations` returns `403 PERMISSION_ERROR`. Managers cannot resolve requests for employees who do not report to them.
+  Attempting to resolve a request you do not own (not `current_approver_id`) without `admin` or `hr_operations` role returns `403 Forbidden`. Managers cannot resolve requests for employees outside their direct reports.
 </Warning>
 
 ```bash Example — Approve
@@ -213,16 +230,65 @@ curl -X PATCH "https://api.example.com/api/v1/leaves/3fa85f64-5717-4562-b3fc-2c9
 
 ---
 
+## POST /leaves/{request_id}/cancel
+
+Cancel a pending leave request. Only the employee who submitted the request may cancel it.
+
+**Auth:** Any authenticated user (own requests only).
+
+### Path Parameters
+
+<ParamField path="request_id" type="uuid" required>
+  UUID of the leave request to cancel.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `LeaveRequestRead` with `status: "cancelled"`.
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/leaves/3fa85f64-5717-4562-b3fc-2c963f66afa6/cancel" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## GET /leaves/{request_id}/timeline
+
+Retrieve the full approval timeline for a leave request, listing every action taken in chronological order.
+
+**Auth:** Any authenticated user (RBAC-scoped).
+
+### Path Parameters
+
+<ParamField path="request_id" type="uuid" required>
+  UUID of the leave request.
+</ParamField>
+
+### Response Fields
+
+Returns an array of `ApprovalTimelineRead` objects.
+
+<ResponseField name="id" type="uuid" required>Unique timeline event identifier.</ResponseField>
+<ResponseField name="actor_id" type="uuid" required>UUID of the user who performed this action.</ResponseField>
+<ResponseField name="actor_name" type="string">Display name of the actor.</ResponseField>
+<ResponseField name="action" type="string" required>Action taken: `created`, `clarified`, `approved`, `rejected`, `escalated`, or `cancelled`.</ResponseField>
+<ResponseField name="comment" type="string">Comment attached to this action.</ResponseField>
+<ResponseField name="created_at" type="datetime" required>ISO-8601 UTC timestamp of the action.</ResponseField>
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/leaves/3fa85f64-5717-4562-b3fc-2c963f66afa6/timeline" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
 ## Standard Error Response
 
 ```json
 {
-  "error": {
-    "code": "PERMISSION_ERROR",
-    "message": "You cannot approve or reject your own leave request.",
-    "details": []
-  }
+  "detail": "You cannot approve or reject your own leave request."
 }
 ```
 
-Common error codes for this resource: `AUTH_ERROR`, `PERMISSION_ERROR`, `NOT_FOUND`, `VALIDATION_ERROR`.
+Common HTTP status codes for this resource: `400 Bad Request`, `401 Unauthorized`, `403 Forbidden`, `404 Not Found`.

@@ -1,7 +1,7 @@
 ---
-title: "System Alerts, Audit Logs, and Announcements"
+title: "System Alerts, Audit Logs, and Announcement Broadcasting"
 sidebarTitle: "Alerts & Audit"
-description: "Reference for automated system alerts, their severity levels and resolution flow, the immutable audit log trail, and org-wide announcement broadcasting."
+description: "Automated system alerts with severity levels, the immutable audit log trail, and org-wide announcement broadcasting for compliance and visibility."
 ---
 
 The governance layer of the platform ensures that every critical operational exception is surfaced as an alert, every sensitive action is permanently recorded in the audit log, and every important broadcast reaches the right audience through announcements. Together these three systems provide the accountability and visibility that HR and compliance teams depend on.
@@ -63,7 +63,6 @@ The `GET /alerts` endpoint returns alerts scoped to the `recipient_user_id` of t
 Resolving an alert sets `status = RESOLVED` and records `resolved_at`. Only the alert's recipient can resolve it.
 
 ```json
-// Example AlertRead response
 {
   "id": "uuid",
   "alert_type": "missing_checkout",
@@ -89,9 +88,9 @@ When a qualifying alert is generated, the Celery worker sends an email notificat
 
 ### Implementation Status
 
-<Info>
+<Note>
   Basic attendance exception alerts (`missing_checkout`, `overdue_task`) are fully implemented. Advanced anomaly detection alerts (e.g., suspicious logging patterns) are partially implemented and continue to be expanded.
-</Info>
+</Note>
 
 ---
 

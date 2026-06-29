@@ -1,7 +1,7 @@
 ---
 title: "Database Migrations, Bootstrap, and Schema Management"
 sidebarTitle: "Migrations"
-description: "How Workforce OS manages its PostgreSQL schema with Alembic, seeds permissions and the bootstrap admin, and handles development vs production database concerns."
+description: "Run Alembic migrations, seed RBAC permissions, create the bootstrap admin account, and manage the Workforce OS PostgreSQL schema in production."
 ---
 
 Workforce OS uses **Alembic** to version-control the PostgreSQL schema and an automated bootstrapper that seeds the RBAC permission matrix and creates the initial admin account on API startup. This page covers running migrations, creating new migration files, the bootstrap flow, seed data for development, and production-specific database considerations.

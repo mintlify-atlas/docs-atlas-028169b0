@@ -1,10 +1,10 @@
 ---
-title: "REST API for Alerts, Audit Logs, and System Ops"
+title: "Alerts, Audit Logs, Daily Duties & EOD Reports REST API"
 sidebarTitle: "Governance"
-description: "Query user-scoped alerts, inspect the immutable Admin-only audit trail, check system health, and trigger restricted database seed and bootstrap operations."
+description: "Query user-scoped alerts, inspect the immutable audit trail, manage daily duties, and review end-of-day reports via JWT-protected REST."
 ---
 
-The governance API provides the oversight and operational infrastructure of the Workforce Intelligence OS. Alerts deliver real-time system signals to individual users; the audit log captures every sensitive state change as an immutable record visible only to administrators; the ops endpoints let DevOps teams verify system health and initialise required database state. All paths are prefixed with `/api/v1` and require a valid JWT except the health check.
+The governance API provides the oversight and operational infrastructure of the Workforce Intelligence OS. Alerts deliver system signals to individual users; the audit log captures every sensitive state change as an immutable record visible only to administrators; the ops endpoints manage personal duties (daily task notes) and end-of-day reports with a structured review workflow. All paths are prefixed with `/api/v1` and require a valid JWT.
 
 <Warning>
   The audit log is **Admin-only** and **immutable**. Records can never be deleted or modified through the API. Attempts by non-admin callers return `403 PERMISSION_ERROR`.
@@ -105,7 +105,7 @@ Returns up to 200 audit log entries ordered by creation time (newest-first).
 </ResponseField>
 
 <Note>
-  Audit log entries are written by the server and cannot be created, edited, or deleted via the API. The 200-record cap applies per request — future pagination support may be added in a later API version.
+  Audit log entries are written by the server and cannot be created, edited, or deleted via the API. The 200-record cap applies per request.
 </Note>
 
 ```bash Example Request
@@ -152,57 +152,228 @@ GET /health
 ```
 
 <Tip>
-  Use this endpoint in Kubernetes `livenessProbe` and `readinessProbe` configurations. For a deeper database connectivity check, combine it with a monitored background task that writes a heartbeat row.
+  Use this endpoint in Kubernetes `livenessProbe` and `readinessProbe` configurations. Permission seeding and admin bootstrapping run automatically at application startup — they do not require manual API calls.
 </Tip>
 
 ---
 
-## Database Ops (Restricted)
+## Daily Duties
 
-These endpoints initialise required database state and are intended for first-run setup or disaster recovery. They do **not** require an authenticated user by default but should be protected by network-level controls (VPN, private subnet) in production.
+Personal duties are lightweight daily task notes backed by `PersonalNote` records. They carry a `title`, optional `description`, and a `pending` / `completed` status. All duty endpoints operate on the currently authenticated user — there is no cross-user access.
+
+### `GET /api/v1/duties`
+
+Returns all duties logged by the authenticated user for today (Asia/Karachi date).
+
+**Auth:** Any authenticated user.
+
+<ResponseField name="[]" type="array">
+  Array of `DutyRead` objects.
+  <Expandable title="DutyRead fields">
+    <ResponseField name="id" type="string">UUID of the duty (maps to the underlying `PersonalNote` ID).</ResponseField>
+    <ResponseField name="user_id" type="string">UUID of the owning user.</ResponseField>
+    <ResponseField name="title" type="string">Duty title extracted from the note content.</ResponseField>
+    <ResponseField name="description" type="string | null">Optional additional detail.</ResponseField>
+    <ResponseField name="status" type="string">`pending` or `completed`.</ResponseField>
+    <ResponseField name="created_at" type="string">ISO-8601 UTC creation timestamp.</ResponseField>
+    <ResponseField name="updated_at" type="string">ISO-8601 UTC last-updated timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Example Response
+[
+  {
+    "id": "d1e2f3a4-...",
+    "user_id": "u1a2b3c4-...",
+    "title": "Review PR #142",
+    "description": "Check the authentication middleware changes",
+    "status": "pending",
+    "created_at": "2025-01-20T08:30:00Z",
+    "updated_at": "2025-01-20T08:30:00Z"
+  }
+]
+```
+
+---
+
+### `POST /api/v1/duties`
+
+Creates a new duty for today.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="title" type="string" required>
+  Duty title.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional additional detail.
+</ParamField>
+
+<ResponseField name="id" type="string">UUID of the created duty.</ResponseField>
+<ResponseField name="status" type="string">Always `"pending"` on creation.</ResponseField>
+
+```json Example Request Body
+{
+  "title": "Write unit tests for attendance service",
+  "description": "Cover check-in, check-out, and auto-checkout edge cases"
+}
+```
+
+---
+
+### `PATCH /api/v1/duties/{duty_id}`
+
+Update a duty's title, description, or completion status.
+
+**Auth:** Any authenticated user. Must own the duty.
+
+<ParamField path="duty_id" type="string" required>
+  UUID of the duty to update.
+</ParamField>
+
+<ParamField body="title" type="string">Updated title.</ParamField>
+<ParamField body="description" type="string">Updated description.</ParamField>
+<ParamField body="status" type="string">Set to `"completed"` to mark done, `"pending"` to reopen.</ParamField>
+
+---
+
+### `DELETE /api/v1/duties/{duty_id}`
+
+Permanently deletes a duty.
+
+**Auth:** Any authenticated user. Must own the duty.
+
+<ParamField path="duty_id" type="string" required>
+  UUID of the duty to delete.
+</ParamField>
+
+<ResponseField name="success" type="boolean">Always `true` on success.</ResponseField>
+
+---
+
+## End-of-Day Reports
+
+EOD reports are structured daily summaries submitted by employees and reviewed by their direct manager. The workflow progresses through states: `Generated` → `Pending Approval` → `Approved` / `Rejected` / `Needs Revision`.
+
+### `GET /api/v1/eod/me`
+
+Returns the authenticated user's EOD report for a specific date, or `null` if none exists.
+
+**Auth:** Any authenticated user.
+
+<ParamField query="date" type="string">
+  Report date in ISO format `YYYY-MM-DD`. Defaults to today (Asia/Karachi timezone).
+</ParamField>
+
+<ResponseField name="id" type="string | null">UUID of the EOD report, or response is `null`.</ResponseField>
+
+---
+
+### `GET /api/v1/eod/me/today`
+
+Convenience alias for `GET /eod/me` with today's date. Returns the current user's EOD for today or `null`.
+
+**Auth:** Any authenticated user.
+
+---
+
+### `POST /api/v1/eod/me/generate`
+
+Generates (or refreshes) the authenticated user's EOD report for today by pulling attendance, time logs, and task activity. If a report already exists it is refreshed in place.
+
+**Auth:** Any authenticated user.
+
+<ResponseField name="id" type="string">UUID of the generated EOD report.</ResponseField>
+<ResponseField name="status" type="string">Report status after generation, e.g. `"Generated"`.</ResponseField>
+
+---
+
+### `POST /api/v1/eod/me/submit`
+
+Submits the authenticated user's EOD report for manager review.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="report_date" type="string" required>
+  Date of the report being submitted. ISO format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField body="work_summary" type="string">
+  Free-text summary of work completed today.
+</ParamField>
+
+<ParamField body="blockers" type="string">
+  Any blockers encountered.
+</ParamField>
+
+<ParamField body="next_day_plan" type="string">
+  Plan for the following day.
+</ParamField>
+
+<ResponseField name="status" type="string">Will be `"Pending Approval"` after successful submission.</ResponseField>
 
 <Warning>
-  These endpoints are **not** safe to expose publicly. Restrict access to the ops API surface at the infrastructure level before deploying to production. Calling `/ops/db/seed` or `/ops/db/bootstrap-admin` on a live database that already has data is safe (both operations are idempotent) but unnecessary.
+  An EOD report must exist (via `generate`) before it can be submitted. Attempting to submit a non-existent report returns `422`.
 </Warning>
 
 ---
 
-### `POST /api/v1/ops/db/seed`
+### `GET /api/v1/eod/team`
 
-Seeds the `permissions` and `role_permissions` tables with the initial permission matrix defined in `app.core.permission_seeder`. If permissions already exist, the seeder performs an upsert — no data is duplicated.
+Returns EOD reports for the manager's direct reports that have been submitted for review. Supports filtering by status, date, and employee search.
 
-**Auth:** Restricted — no JWT check enforced by default; secure via network policy.
+**Auth:** `MANAGER` or `ADMIN` role required.
 
-<ResponseField name="message" type="string">Confirmation message on success.</ResponseField>
+<ParamField query="search" type="string">
+  Filter by employee name, email, role, department, or designation.
+</ParamField>
 
-```bash Example Request
-POST /api/v1/ops/db/seed
-```
+<ParamField query="status" type="string">
+  Filter by EOD status: `Pending Approval`, `Approved`, `Rejected`, or `Needs Revision`.
+</ParamField>
 
-```json Example Response
-{ "message": "Permissions seeded successfully." }
-```
+<ParamField query="report_date" type="string">
+  Filter to a specific date ISO `YYYY-MM-DD`.
+</ParamField>
+
+<ResponseField name="[]" type="array">
+  Array of `EODReportRead` objects for the manager's direct reports, ordered by date descending.
+</ResponseField>
 
 ---
 
-### `POST /api/v1/ops/db/bootstrap-admin`
+### `POST /api/v1/eod/{report_id}/review`
 
-Ensures a system administrator account exists. If no admin user is found in the database, a default admin is created using the credentials defined in `settings.bootstrap_admin_*` environment variables. If an admin already exists, this is a no-op.
+Reviews a submitted EOD report by approving, rejecting, or requesting revision.
 
-**Auth:** Restricted — no JWT check enforced by default; secure via network policy.
+**Auth:** `MANAGER` or `ADMIN` role required. The reviewer must be the submitter's direct manager.
 
-<ResponseField name="message" type="string">Indicates whether an admin was created or already existed.</ResponseField>
+<ParamField path="report_id" type="string" required>
+  UUID of the EOD report to review.
+</ParamField>
 
-```bash Example Request
-POST /api/v1/ops/db/bootstrap-admin
-```
+<ParamField body="action" type="string" required>
+  Review decision. One of: `Approved`, `Rejected`, `Needs Revision`.
+</ParamField>
 
-```json Example Response — Admin created
-{ "message": "Admin user created: admin@example.com" }
-```
+<ParamField body="comments" type="string">
+  Optional reviewer feedback attached to the report.
+</ParamField>
 
-```json Example Response — Admin already exists
-{ "message": "Admin already exists. No action taken." }
+<ResponseField name="id" type="string">UUID of the reviewed report.</ResponseField>
+<ResponseField name="status" type="string">Updated status reflecting the review decision.</ResponseField>
+<ResponseField name="manager_comments" type="string | null">Comments stored on the report.</ResponseField>
+
+<Warning>
+  A manager cannot review their own EOD report. Attempting to do so returns `403`. HR Operations users are not authorised to review EODs — only the direct manager or an Admin may review.
+</Warning>
+
+```json Example Request Body
+{
+  "action": "Approved",
+  "comments": "Great work today — well-structured summary."
+}
 ```
 
 ---
@@ -212,6 +383,7 @@ POST /api/v1/ops/db/bootstrap-admin
 | HTTP Status | Error Code | Reason |
 |---|---|---|
 | `401` | `AUTH_ERROR` | Missing or invalid JWT |
-| `403` | `PERMISSION_ERROR` | Caller is not an Admin |
-| `404` | `NOT_FOUND` | Alert not found |
+| `403` | `PERMISSION_ERROR` | Caller is not authorised (wrong role or not the owner) |
+| `404` | `NOT_FOUND` | Alert, duty, or EOD report not found |
+| `422` | `VALIDATION_ERROR` | Invalid review action or missing required fields |
 | `500` | `INTERNAL_ERROR` | Unhandled server error |

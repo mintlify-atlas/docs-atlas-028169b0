@@ -1,5 +1,5 @@
 ---
-title: "System Architecture: FastAPI, Next.js, and Celery"
+title: "System Architecture: Monorepo, Layers & Tech Stack"
 sidebarTitle: "Architecture"
 description: "A complete walkthrough of the Workforce OS monorepo structure, tech stack, request lifecycle, layered backend design, and security architecture."
 ---
@@ -13,14 +13,14 @@ All application code lives in a single repository partitioned into discrete `app
 ```text
 /HR Monitoring System
   /apps
-    /web          # Next.js frontend (App Router, TypeScript, Tailwind)
-    /api          # FastAPI backend (Python, SQLAlchemy, Pydantic)
-    /worker       # Celery worker (async tasks, email, reporting)
+    /web         # Next.js frontend application
+    /api         # FastAPI backend application
+    /worker      # Celery worker (async tasks, email, reporting)
   /packages
-    /ui           # Shared UI components
-    /types        # Shared TypeScript type definitions
-  /infra          # Infrastructure-as-code / deployment scripts
-  /docs           # Project documentation
+    /ui          # Shared UI components
+    /types       # Shared TypeScript type definitions
+  /infra         # Infrastructure-as-code / deployment scripts
+  /docs          # Project documentation
 ```
 
 The `apps/api` backend code is further organised into a layered structure under `apps/api/app`:
@@ -44,7 +44,7 @@ The `apps/web` frontend lives under `apps/web/src` with role-scoped route groups
 ```text
 /src
   /app
-    /(auth)           # Login, Forgot Password, Reset
+    /(auth)           # Login, Forgot Password, Activate, Reset Password
     /(dashboard)      # Protected dashboard routes
       /admin          # Admin-only views
       /hr             # HR/Operations views
@@ -90,7 +90,7 @@ PostgreSQL DB          Redis Broker
     **FastAPI** (Python) · SQLAlchemy ORM · Pydantic v2 · Alembic migrations · Passlib BCrypt · python-jose JWT
   </Card>
   <Card title="Data & Messaging" icon="database">
-    **PostgreSQL** (production) · SQLite (local dev only) · **Redis** message broker
+    **PostgreSQL** (production) · **Redis** message broker
   </Card>
   <Card title="Background Processing" icon="clock">
     **Celery** worker — email alerts, report generation, periodic metric recalculations
@@ -162,7 +162,7 @@ Every HTTP request from the browser travels through eight distinct stages before
     - All timestamps are stored in **UTC** and converted to `Asia/Karachi` (PKT) for display.
   </Tab>
   <Tab title="Background Jobs">
-    Located in `/worker`, this layer:
+    Located in `/apps/worker`, this layer:
     - **Celery** tasks handle asynchronous processing.
     - **Redis** serves as the message broker.
     - Tasks include: transactional email alerts, scheduled report generation, and periodic metric recalculations.

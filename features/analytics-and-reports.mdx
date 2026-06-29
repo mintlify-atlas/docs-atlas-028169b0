@@ -1,7 +1,7 @@
 ---
-title: "Analytics Dashboards and Workforce Reports"
-sidebarTitle: "Analytics"
-description: "Role-scoped dashboards and workforce reports covering KPIs, attendance trends, task stats, and performance scoring across Admin, Manager, and Employee views."
+title: "Analytics Dashboards and Workforce Performance Reports"
+sidebarTitle: "Analytics & Reports"
+description: "Role-scoped dashboards covering KPIs, attendance trends, task statistics, and performance scoring for Admin, Manager, and Employee views."
 ---
 
 The Analytics module transforms raw activity data into actionable workforce intelligence. Each role receives a purpose-built dashboard that surfaces the metrics most relevant to their responsibilities, all backed by the same underlying data pipeline of attendance sessions, time logs, daily statistics, and performance metrics. Reports can be pulled on-demand for any date range, and team performance data is exportable to CSV.
@@ -160,7 +160,7 @@ All dashboard and report data originates from four primary sources:
     Timer-based productive time. Each log has `started_at`, `duration_minutes`, a `status` (`ACTIVE` or completed), and a `log_type` (`timer` vs. `manual`). Feeds the `productive_time_today` KPI.
   </Card>
   <Card title="Performance Metrics" icon="chart-line">
-    A dedicated scoring engine computes `Utilization`, `Consistency`, and `Output` scores from weighted combinations of the sources above. Exposed through `GET /analytics/admin/analytics` endpoints.
+    A dedicated scoring engine computes `Utilization`, `Consistency`, and `Output` scores from weighted combinations of the sources above. Exposed via the analytics endpoints documented below.
   </Card>
 </CardGroup>
 

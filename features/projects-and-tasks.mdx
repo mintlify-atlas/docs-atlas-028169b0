@@ -13,13 +13,13 @@ The Work Execution module follows a **Project-First** hierarchy: every task must
     Any authenticated user can call `POST /api/v1/projects` with a title, description, priority, and optional due date. The project is created in `pending_approval` status.
   </Step>
   <Step title="Manager or Admin reviews the request">
-    `POST /api/v1/projects/{project_id}/approve` accepts a `ProjectDecision` payload. The approver sets `action` to `approved` or `rejected` and may attach a comment.
+    `POST /api/v1/projects/{project_id}/approve` accepts a `ProjectDecision` payload. The approver sets `decision` to `approved` or `rejected` and may attach a reason.
   </Step>
   <Step title="Project becomes task-eligible">
     Once approved, the project status advances and it appears in the `GET /api/v1/projects/task-eligible` endpoint, making it available for task creation dropdowns. Only `approved` or `active` projects are returned here.
   </Step>
   <Step title="Project progresses through active and completed states">
-    Status advances from `approved` → `active` → `completed` as work proceeds. A project can also move to `on_hold` or be soft-deleted via `PATCH /api/v1/projects/{project_id}/archive`.
+    When a project is approved it transitions immediately to `active`. From there it advances to `completed` as work concludes. A project can also move to `on_hold` or be soft-deleted via `PATCH /api/v1/projects/{project_id}/archive`.
   </Step>
 </Steps>
 
@@ -61,7 +61,7 @@ Content-Type: application/json
 ```
 
 <Note>
-The response returns `approval_status: pending_approval`. Tasks cannot be created under this project until a manager or admin calls the approve endpoint and sets the project to `approved`.
+The response returns `project_status: pending_approval`. Tasks cannot be created under this project until a manager or admin calls the approve endpoint and sets the project to `active`.
 </Note>
 
 ## Task Lifecycle
@@ -158,7 +158,7 @@ Interns and junior employees cannot mark a task as completed directly. They must
 
 <Steps>
   <Step title="Employee submits completion request">
-    `POST /api/v1/tasks/{task_id}/completion-requests` with an optional summary note. A `TaskCompletionRequest` record is created with status `pending`.
+    `POST /api/v1/tasks/{task_id}/completion-requests` with an optional `request_note` string. A `TaskCompletionRequest` record is created with status `pending`.
   </Step>
   <Step title="Manager reviews pending requests">
     `GET /api/v1/tasks/completion-requests?status=pending` returns all requests in the manager's team scope.

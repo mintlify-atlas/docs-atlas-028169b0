@@ -1,7 +1,7 @@
 ---
-title: "Authenticating with the Workforce OS API"
+title: "Workforce OS API: Authentication Endpoints Reference"
 sidebarTitle: "Auth Endpoints"
-description: "Complete reference for all auth endpoints: login, token refresh, logout, password reset, and invited-user account activation."
+description: "Complete reference for all auth endpoints: login, token refresh, logout, password reset, account activation, WebSocket tickets, and user permissions."
 ---
 
 The Workforce OS API uses a JWT-based authentication scheme. A successful login returns a short-lived **access token** and a longer-lived **refresh token**. The access token is passed as a `Bearer` credential on every protected request; the refresh token is used only to rotate the pair when the access token expires. All endpoints below are mounted at `/api/v1/auth`.
@@ -294,7 +294,7 @@ If the token is invalid or expired the API returns `400 Bad Request`:
 ```json
 {
   "error": {
-    "code": "VALIDATION_ERROR",
+    "code": "API_ERROR",
     "message": "Invalid or expired reset token",
     "details": []
   }
@@ -350,7 +350,7 @@ If the token is invalid or has already been used the API returns `400 Bad Reques
 ```json
 {
   "error": {
-    "code": "VALIDATION_ERROR",
+    "code": "API_ERROR",
     "message": "Invalid or expired invitation token",
     "details": []
   }
@@ -358,3 +358,91 @@ If the token is invalid or has already been used the API returns `400 Bad Reques
 ```
 
 After a successful activation the user's `status` is set to `active` and they can authenticate via `POST /auth/login`.
+
+---
+
+## POST /auth/ws-ticket
+
+Issue a short-lived, single-use ticket that authorizes a WebSocket connection. The ticket is passed as a query parameter when opening the WebSocket so that a standard `Authorization` header cannot be used in the handshake.
+
+```http
+POST /api/v1/auth/ws-ticket
+Authorization: Bearer <access_token>
+```
+
+<Note>
+  A valid `Authorization: Bearer <access_token>` header is **required**. The ticket is scoped to the authenticated user and cannot be shared.
+</Note>
+
+### Example Request
+
+```bash cURL
+curl -X POST https://<your-domain>/api/v1/auth/ws-ticket \
+  -H "Authorization: Bearer <access_token>"
+```
+
+### Response
+
+**200 OK**
+
+```json
+{
+  "ticket": "ws_ticket_a1b2c3d4e5f6...",
+  "expires_in": 30
+}
+```
+
+<ResponseField name="ticket" type="string">
+  Short-lived opaque token. Pass as `?ticket=<ticket>` when opening a WebSocket connection.
+</ResponseField>
+
+<ResponseField name="expires_in" type="integer">
+  Seconds until the ticket expires. Tickets are valid for a very short window — open the WebSocket immediately after obtaining one.
+</ResponseField>
+
+---
+
+## GET /auth/me/permissions
+
+Return the full set of resolved permissions for the currently authenticated user along with their role.
+
+```http
+GET /api/v1/auth/me/permissions
+Authorization: Bearer <access_token>
+```
+
+### Example Request
+
+```bash cURL
+curl https://<your-domain>/api/v1/auth/me/permissions \
+  -H "Authorization: Bearer <access_token>"
+```
+
+### Response
+
+**200 OK**
+
+```json
+{
+  "user_id": "018e4c2a-1234-7abc-9def-000000000001",
+  "role": "manager",
+  "permissions": [
+    "attendance:read",
+    "leaves:approve",
+    "projects:read",
+    "tasks:write"
+  ]
+}
+```
+
+<ResponseField name="user_id" type="string">
+  UUID of the authenticated user.
+</ResponseField>
+
+<ResponseField name="role" type="string">
+  The user's current role, e.g. `employee`, `manager`, `hr`, or `admin`.
+</ResponseField>
+
+<ResponseField name="permissions" type="array">
+  Alphabetically sorted list of permission strings granted to this user's role.
+</ResponseField>

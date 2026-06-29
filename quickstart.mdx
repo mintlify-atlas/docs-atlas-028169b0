@@ -7,7 +7,7 @@ description: "Spin up the full Workforce Intelligence & Execution OS stack local
 The **Workforce Intelligence & Execution OS** is a monorepo containing a FastAPI backend, a Celery background worker, and a Next.js 15 frontend. This quickstart guide walks you through cloning the repository, configuring your environment, installing dependencies, running all three services, and logging in with the bootstrap admin account.
 
 <Note>
-  The default local setup uses **SQLite** for the database — no PostgreSQL installation is required to get started. For a full production-equivalent environment, see the [Local Development Guide](/local-development).
+  The default local setup can use **SQLite** for the database — no PostgreSQL installation is required to get started. To use SQLite, comment out the `DATABASE_URL` line in your `.env` file after copying it from `.env.example`. For a full production-equivalent environment with PostgreSQL, see the [Local Development Guide](/local-development).
 </Note>
 
 ## Prerequisites
@@ -20,7 +20,7 @@ Before you begin, ensure the following tools are installed on your machine:
 | **Python** | 3.10 | v3.11 also supported |
 | **Redis** | Latest stable | Required for Celery background tasks |
 | **Git** | Any recent | For cloning the repository |
-| **PostgreSQL** | 14+ | Optional locally; SQLite used by default |
+| **PostgreSQL** | 14+ | Optional locally; comment out `DATABASE_URL` to use SQLite instead |
 
 <Steps>
 
@@ -40,17 +40,16 @@ Before you begin, ensure the following tools are installed on your machine:
     cp .env.example .env
     ```
 
-    Open `.env` and update these two required values before proceeding:
+    Open `.env` and review these key values before proceeding:
 
-    ```bash .env
+    ```bash
     # Required — set a secure random string
     APP_SECRET_KEY=change-me-locally
 
-    # Required — points to your local PostgreSQL instance
-    # Leave as-is to use the default local PostgreSQL setup:
+    # Database — defaults to PostgreSQL. Comment this line out to use the SQLite fallback instead:
     DATABASE_URL=postgresql://postgres:postgres@localhost:5432/workforce_intelligence_utf8
 
-    # Bootstrap admin credentials — used to create the first admin user
+    # Bootstrap admin credentials — used to create the first admin user on startup
     BOOTSTRAP_ADMIN_EMAIL=admin@example.com
     BOOTSTRAP_ADMIN_PASSWORD=change-this-password
     BOOTSTRAP_ADMIN_NAME="HR Admin"
@@ -61,7 +60,7 @@ Before you begin, ensure the following tools are installed on your machine:
     </Warning>
 
     <Tip>
-      To test locally with SQLite instead of PostgreSQL, comment out the `DATABASE_URL` line in `.env`. The backend will fall back to a local `workforce_intelligence.db` SQLite file automatically.
+      To run locally without PostgreSQL, comment out the `DATABASE_URL` line in `.env`. The backend will automatically fall back to a local `workforce_intelligence.db` SQLite file.
     </Tip>
   </Step>
 
@@ -116,7 +115,7 @@ Before you begin, ensure the following tools are installed on your machine:
     npm install
     ```
 
-    npm workspaces automatically installs dependencies for `apps/web`, `apps/mobile`, and all `packages/` in a single command.
+    npm workspaces automatically installs dependencies for `apps/web` and all `packages/` in a single command.
   </Step>
 
   <Step title="Start the API Server">

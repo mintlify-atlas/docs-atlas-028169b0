@@ -1,12 +1,12 @@
 ---
-title: "REST API Reference: Recording and Querying Task Time Logs"
+title: "Time Logs API — Task Timers and Manual Time Entries"
 sidebarTitle: "Time Logs"
-description: "Start and stop per-task timers or submit manual entries with explicit timestamps. Timer logs auto-compute duration from accumulated session intervals."
+description: "Start, pause, resume, and stop per-task timers or submit manual entries with explicit timestamps. Duration is computed from accumulated timer intervals."
 ---
 
-The Time Logs API captures how long employees spend on individual tasks. It supports two complementary entry modes: a **timer-based flow** that measures elapsed time precisely from when you click start to when you stop, and a **manual entry flow** for logging time blocks that were worked without an active timer — for example, when recording offline work retroactively.
+The Time Logs API captures how long employees spend on individual tasks. It supports two complementary entry modes: a **timer-based flow** that measures elapsed time precisely from start through any pauses to stop, and a **manual entry flow** for logging time blocks that were worked without an active timer — for example, when recording offline work retroactively.
 
-All time logs are linked to a specific task and contribute to `actual_duration_minutes` on that task, which is used for workload analytics and burndown calculations.
+All time logs are linked to a specific task and contribute to `actual_duration_minutes` on that task, which feeds workload analytics and burndown calculations.
 
 <Note>
   All endpoints are prefixed with `/api/v1/time-logs` and require an `Authorization: Bearer <token>` header. All timestamps are returned in UTC ISO-8601 format with a `Z` suffix.
@@ -14,22 +14,39 @@ All time logs are linked to a specific task and contribute to `actual_duration_m
 
 ---
 
-## Log Source Types
+## Enum Reference
 
-Every `TimeLogRead` object carries a `source_type` field that distinguishes how the entry was created.
+### Log Source Type
 
 | Value | Description |
 |-------|-------------|
-| `timer` | Created automatically when a running timer session is stopped via `POST /time-logs/stop`. The duration is computed from the timer session's accumulated running time. |
+| `timer` | Created automatically when a running timer session is stopped via `POST /time-logs/stop`. Duration is computed from accumulated running intervals. |
 | `manual` | Created explicitly via `POST /time-logs/manual` by supplying `started_at` and `ended_at` timestamps. |
 
-## Log Status Values
+### Log Status
 
 | Value | Description |
 |-------|-------------|
 | `active` | Timer is currently running (timer-source logs only). |
 | `completed` | Timer has been stopped or manual log has been saved. |
-| `invalid` | Log was flagged by the system (e.g., overlapping or suspicious duration). |
+| `invalid` | Log was flagged by the system (e.g. overlapping or suspicious duration). |
+
+### Timer Session Status
+
+| Value | Description |
+|-------|-------------|
+| `running` | Timer is actively counting. |
+| `paused` | Timer is paused; `pause_reason` is set. |
+| `completed` | Timer session has been finalised and converted to a TimeLog. |
+
+### Timer Pause Reason
+
+| Value | Description |
+|-------|-------------|
+| `manual_pause` | User manually paused the timer. |
+| `attendance_checkout` | Timer was auto-paused when the user checked out of their attendance session. |
+| `break_started` | Timer was auto-paused when an attendance break began. |
+| `system` | System-initiated pause (e.g. server maintenance or session expiry). |
 
 ---
 
@@ -37,7 +54,7 @@ Every `TimeLogRead` object carries a `source_type` field that distinguishes how 
 
 Start a new timer session on the specified task. Only one active timer is permitted per user at a time. The timer begins tracking elapsed seconds from the moment this call succeeds.
 
-**Auth:** Any authenticated user. The task must be assigned to the caller (or the caller must be a manager/admin).
+**Auth:** Any authenticated user. The task must be assigned to the caller, or the caller must be a manager/admin.
 
 ### Request Body
 
@@ -51,19 +68,78 @@ Returns a `TaskTimerRead` object representing the active timer session.
 
 <ResponseField name="id" type="uuid" required>Unique timer session identifier.</ResponseField>
 <ResponseField name="task_id" type="uuid" required>Task this timer is running against.</ResponseField>
+<ResponseField name="task_title" type="string">Resolved task name.</ResponseField>
+<ResponseField name="project_title" type="string">Resolved parent project name.</ResponseField>
 <ResponseField name="user_id" type="uuid" required>UUID of the employee who owns this timer.</ResponseField>
 <ResponseField name="status" type="string" required>Timer state: `running`, `paused`, or `completed`.</ResponseField>
 <ResponseField name="started_at" type="datetime" required>UTC timestamp of the first start.</ResponseField>
-<ResponseField name="last_resumed_at" type="datetime">UTC timestamp of the most recent resume (after a pause).</ResponseField>
-<ResponseField name="accumulated_seconds" type="integer">Total seconds accumulated across all running intervals, excluding pause time.</ResponseField>
+<ResponseField name="last_resumed_at" type="datetime" required>UTC timestamp of the most recent resume (equals `started_at` on first start).</ResponseField>
+<ResponseField name="paused_at" type="datetime">UTC timestamp of when the timer was last paused; `null` when running.</ResponseField>
+<ResponseField name="accumulated_seconds" type="integer" required>Total seconds accumulated across all running intervals, excluding pause time.</ResponseField>
 <ResponseField name="pause_reason" type="string">Why the timer was paused: `manual_pause`, `attendance_checkout`, `break_started`, or `system`.</ResponseField>
+<ResponseField name="created_at" type="datetime" required>Record creation timestamp.</ResponseField>
+<ResponseField name="updated_at" type="datetime" required>Last update timestamp.</ResponseField>
 
 <Warning>
-  A timer is automatically paused when the user checks out of an attendance session or starts an attendance break. It is not paused when other users' actions occur, so you should call `POST /time-logs/stop` before ending your work day.
+  A timer is automatically paused when the user checks out of an attendance session or starts an attendance break. Call `POST /time-logs/stop` before ending your work day to finalise the log.
 </Warning>
 
 ```bash Example
 curl -X POST "https://api.example.com/api/v1/time-logs/start" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+  }'
+```
+
+---
+
+## POST /time-logs/pause
+
+Pause the active timer session for the specified task. The timer stops accumulating seconds until it is resumed.
+
+**Auth:** Any authenticated user (must own the active timer).
+
+### Request Body
+
+<ParamField body="task_id" type="uuid" required>
+  UUID of the task whose active timer should be paused.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `TaskTimerRead` with `status: "paused"` and `pause_reason: "manual_pause"`. See [POST /time-logs/start](#post-time-logs-start) for the full field list.
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/time-logs/pause" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+  }'
+```
+
+---
+
+## POST /time-logs/resume
+
+Resume a paused timer session for the specified task, continuing to accumulate seconds from the current moment.
+
+**Auth:** Any authenticated user (must own the paused timer).
+
+### Request Body
+
+<ParamField body="task_id" type="uuid" required>
+  UUID of the task whose paused timer should be resumed.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `TaskTimerRead` with `status: "running"` and `pause_reason` cleared to `null`.
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/time-logs/resume" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -118,19 +194,36 @@ curl -X POST "https://api.example.com/api/v1/time-logs/stop" \
   }'
 ```
 
-### Complete Timer Flow Example
+### Complete Timer Lifecycle Example
 
-```bash Step 1 — Start the timer
+```bash Step 1 — Start
 curl -X POST "https://api.example.com/api/v1/time-logs/start" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"task_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"}'
 
 # Response: TaskTimerRead with status "running"
+```
 
-# ... do your work ...
+```bash Step 2 — Pause (optional)
+curl -X POST "https://api.example.com/api/v1/time-logs/pause" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"task_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"}'
 
-# Step 2 — Stop the timer and save the log
+# Response: TaskTimerRead with status "paused"
+```
+
+```bash Step 3 — Resume (optional)
+curl -X POST "https://api.example.com/api/v1/time-logs/resume" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"task_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"}'
+
+# Response: TaskTimerRead with status "running"
+```
+
+```bash Step 4 — Stop and save log
 curl -X POST "https://api.example.com/api/v1/time-logs/stop" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
@@ -140,6 +233,23 @@ curl -X POST "https://api.example.com/api/v1/time-logs/stop" \
   }'
 
 # Response: TimeLogRead with source_type "timer", duration_minutes computed
+```
+
+---
+
+## GET /time-logs/active-timer
+
+Return the authenticated user's currently active or paused timer session, or `null` if no timer is running.
+
+**Auth:** Any authenticated user.
+
+### Response Fields
+
+Returns a single `TaskTimerRead` object, or `null`. See [POST /time-logs/start](#post-time-logs-start) for the full field list.
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/time-logs/active-timer" \
+  -H "Authorization: Bearer <token>"
 ```
 
 ---
@@ -173,7 +283,7 @@ Directly record a time entry by supplying explicit start and end timestamps. Use
 Returns a `TimeLogRead` object with `source_type: "manual"`.
 
 <Tip>
-  The system validates that `ended_at > started_at`. Reversed or identical timestamps return a `400 VALIDATION_ERROR`. For long work blocks, it is recommended to break them into smaller entries of no more than 4 hours for accurate reporting.
+  The system validates that `ended_at > started_at`. Reversed or identical timestamps return `400 Bad Request`.
 </Tip>
 
 ```bash Example
@@ -184,7 +294,7 @@ curl -X POST "https://api.example.com/api/v1/time-logs/manual" \
     "task_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
     "started_at": "2024-07-10T10:00:00Z",
     "ended_at": "2024-07-10T12:30:00Z",
-    "notes": "Reviewed design specs and prepared technical breakdown with the architecture team."
+    "notes": "Reviewed design specs and prepared technical breakdown."
   }'
 ```
 
@@ -192,7 +302,7 @@ curl -X POST "https://api.example.com/api/v1/time-logs/manual" \
 
 ## GET /time-logs/me
 
-Retrieve the authenticated employee's full time log history across all tasks and projects. Entries are ordered by `started_at` descending.
+Retrieve the authenticated employee's full time log history across all tasks and projects, ordered by `started_at` descending.
 
 **Auth:** Any authenticated user.
 
@@ -201,7 +311,7 @@ Retrieve the authenticated employee's full time log history across all tasks and
 Returns an array of `TimeLogRead` objects. See [POST /time-logs/stop](#post-time-logs-stop) for the full field list.
 
 <Tip>
-  Use this endpoint to populate a personal timesheet view. The `source_type` field lets you visually distinguish timer-tracked entries from manually entered ones.
+  Use the `source_type` field to visually distinguish timer-tracked entries from manually entered ones in a personal timesheet view.
 </Tip>
 
 ```bash Example
@@ -228,24 +338,25 @@ curl -X GET "https://api.example.com/api/v1/time-logs/me" \
     "status": "completed",
     "created_at": "2024-07-10T11:45:02Z",
     "updated_at": "2024-07-10T11:45:02Z"
-  },
-  {
-    "id": "c3d4e5f6-0000-0000-0000-000000000003",
-    "task_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-    "task_title": "Implement OAuth2 login flow",
-    "user_id": "b5c6d7e8-0000-0000-0000-000000000002",
-    "user_name": "Ayesha Raza",
-    "project_title": "Customer Portal Redesign Q3",
-    "started_at": "2024-07-09T14:00:00Z",
-    "ended_at": "2024-07-09T16:00:00Z",
-    "duration_minutes": 120,
-    "source_type": "manual",
-    "notes": "Architecture review session with team.",
-    "status": "completed",
-    "created_at": "2024-07-09T16:05:00Z",
-    "updated_at": "2024-07-09T16:05:00Z"
   }
 ]
+```
+
+---
+
+## GET /time-logs/team
+
+Retrieve time logs for the authenticated user's team. Managers see their direct reports' logs; Admins and HR see the entire organisation.
+
+**Auth:** Any authenticated user. Results are RBAC-scoped.
+
+### Response Fields
+
+Returns an array of `TimeLogRead` objects.
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/time-logs/team" \
+  -H "Authorization: Bearer <token>"
 ```
 
 ---
@@ -254,12 +365,8 @@ curl -X GET "https://api.example.com/api/v1/time-logs/me" \
 
 ```json
 {
-  "error": {
-    "code": "CONFLICT",
-    "message": "You already have an active timer session. Stop it before starting a new one.",
-    "details": []
-  }
+  "detail": "You already have an active timer session. Stop it before starting a new one."
 }
 ```
 
-Common error codes for this resource: `AUTH_ERROR`, `CONFLICT`, `NOT_FOUND`, `VALIDATION_ERROR`, `PERMISSION_ERROR`.
+Common HTTP status codes for this resource: `400 Bad Request`, `401 Unauthorized`, `403 Forbidden`, `404 Not Found`, `409 Conflict`.

@@ -1,10 +1,10 @@
 ---
-title: "REST API for Departments, Shifts, Holidays, and Announcements"
+title: "Departments, Shifts, Holidays & Announcements REST API"
 sidebarTitle: "Organization"
-description: "Manage the structural building blocks of your workforce — departments, work shifts, public holidays, announcements, and role-based permission records."
+description: "Manage departments, work shifts, public holidays, announcements, and role-based permission records — all JWT-protected REST endpoints."
 ---
 
-The organization API covers all configuration objects that define how your workforce is structured and informed. Departments, shifts, and holidays form the scheduling backbone; announcements carry time-bounded communications to role or department-scoped audiences; permissions expose the full RBAC model. All paths are prefixed with `/api/v1` and require a valid JWT.
+The organization API covers all configuration objects that define how your workforce is structured and informed. Departments, shifts, and holidays form the scheduling backbone; announcements carry time-bounded communications to role-scoped audiences; permissions expose the full RBAC model. All paths are prefixed with `/api/v1` and require a valid JWT.
 
 <Note>
   Unless otherwise noted, every endpoint requires `Authorization: Bearer <token>`. Create/update operations are restricted to `ADMIN` or `HR_OPERATIONS` roles.
@@ -60,7 +60,7 @@ Creates a new department. The designated head must be an active user with role `
 </ParamField>
 
 <ParamField body="head_id" type="string">
-  UUID of the user to assign as department head. Alias for `admin_id`.
+  UUID of the user to assign as department head. Alias for `admin_id` — either field is accepted.
 </ParamField>
 
 <ParamField body="is_active" type="boolean">
@@ -100,6 +100,26 @@ Fetch a single department by UUID.
 
 **Auth:** Any authenticated user.
 
+<ParamField path="department_id" type="string" required>
+  UUID of the department.
+</ParamField>
+
+---
+
+### `GET /api/v1/departments/{department_id}/employees`
+
+Returns the list of employees currently assigned to this department.
+
+**Auth:** Any authenticated user.
+
+<ParamField path="department_id" type="string" required>
+  UUID of the department.
+</ParamField>
+
+<ResponseField name="[]" type="array">
+  Array of `OrganizationMemberRead` objects with employee details and assignment metadata.
+</ResponseField>
+
 ---
 
 ### `PATCH /api/v1/departments/{department_id}`
@@ -108,6 +128,13 @@ Update department fields. Partial updates — only send fields you want to chang
 
 **Auth:** `ADMIN` role required.
 
+<ParamField path="department_id" type="string" required>UUID of the department to update.</ParamField>
+
+<ParamField body="name" type="string">New department name.</ParamField>
+<ParamField body="description" type="string">Updated description.</ParamField>
+<ParamField body="head_id" type="string">UUID of the new department head. Must be an eligible active user.</ParamField>
+<ParamField body="is_active" type="boolean">Set to `false` to deactivate.</ParamField>
+
 ---
 
 ### `DELETE /api/v1/departments/{department_id}`
@@ -115,6 +142,14 @@ Update department fields. Partial updates — only send fields you want to chang
 Soft-deletes a department by setting `is_active = false`. Fails with `409 CONFLICT` if any employees are still assigned to this department.
 
 **Auth:** `ADMIN` role required.
+
+<ParamField path="department_id" type="string" required>UUID of the department to deactivate.</ParamField>
+
+<ResponseField name="success" type="boolean">Always `true` on success.</ResponseField>
+
+<Warning>
+  Departments with assigned employees cannot be deactivated. Reassign all employees to a different department first.
+</Warning>
 
 ---
 
@@ -178,15 +213,75 @@ Creates a new shift definition.
 
 ---
 
+### `GET /api/v1/shifts/{shift_id}`
+
+Fetch a single shift by UUID.
+
+**Auth:** Any authenticated user.
+
+<ParamField path="shift_id" type="string" required>
+  UUID of the shift.
+</ParamField>
+
+---
+
+### `PATCH /api/v1/shifts/{shift_id}`
+
+Update shift fields. Only the provided fields are changed.
+
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+<ParamField path="shift_id" type="string" required>UUID of the shift to update.</ParamField>
+<ParamField body="name" type="string">Updated shift name.</ParamField>
+<ParamField body="start_time" type="string">Updated start time `HH:MM:SS`.</ParamField>
+<ParamField body="end_time" type="string">Updated end time `HH:MM:SS`.</ParamField>
+<ParamField body="is_active" type="boolean">Set to `false` to deactivate.</ParamField>
+
+---
+
 ### `POST /api/v1/shifts/assign/{user_id}`
 
 Assigns a shift to a specific employee. Pass `shift_id` as a query parameter; omit it to unassign.
 
 **Auth:** `ADMIN` or `HR_OPERATIONS` role required.
 
+<ParamField path="user_id" type="string" required>
+  UUID of the employee to assign the shift to.
+</ParamField>
+
 <ParamField query="shift_id" type="string">
   UUID of the shift to assign. Omit to clear the user's shift assignment.
 </ParamField>
+
+<ResponseField name="message" type="string">Always `"Shift assigned successfully"` on success.</ResponseField>
+
+---
+
+### `GET /api/v1/shifts/{shift_id}/employees`
+
+Returns the list of employees assigned to this shift.
+
+**Auth:** Any authenticated user.
+
+<ParamField path="shift_id" type="string" required>
+  UUID of the shift.
+</ParamField>
+
+<ResponseField name="[]" type="array">
+  Array of `OrganizationMemberRead` objects.
+</ResponseField>
+
+---
+
+### `DELETE /api/v1/shifts/{shift_id}`
+
+Deactivates a shift by setting `is_active = false`.
+
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+<ParamField path="shift_id" type="string" required>UUID of the shift to deactivate.</ParamField>
+
+<ResponseField name="success" type="boolean">Always `true` on success.</ResponseField>
 
 ---
 
@@ -256,6 +351,14 @@ Creates a new public holiday entry.
 
 ---
 
+### `GET /api/v1/holidays/active`
+
+Returns only holidays where `is_active` is `true`.
+
+**Auth:** Any authenticated user.
+
+---
+
 ### `GET /api/v1/holidays/upcoming`
 
 Returns the next N active holidays from the given anchor date. Useful for dashboard widgets.
@@ -272,9 +375,35 @@ Returns the next N active holidays from the given anchor date. Useful for dashbo
 
 ---
 
+### `PATCH /api/v1/holidays/{holiday_id}`
+
+Update holiday fields. Only the provided fields are changed.
+
+**Auth:** `ADMIN` role required.
+
+<ParamField path="holiday_id" type="string" required>UUID of the holiday to update.</ParamField>
+<ParamField body="name" type="string">Updated holiday name.</ParamField>
+<ParamField body="holiday_date" type="string">Updated date ISO `YYYY-MM-DD`.</ParamField>
+<ParamField body="description" type="string">Updated description.</ParamField>
+<ParamField body="is_active" type="boolean">Set to `false` to deactivate.</ParamField>
+
+---
+
+### `DELETE /api/v1/holidays/{holiday_id}`
+
+Deactivates a holiday by setting `is_active = false`.
+
+**Auth:** `ADMIN` role required.
+
+<ParamField path="holiday_id" type="string" required>UUID of the holiday to deactivate.</ParamField>
+
+<ResponseField name="success" type="boolean">Always `true` on success.</ResponseField>
+
+---
+
 ## Announcements
 
-Announcements are time-bounded messages broadcast to specific role or department audiences. The server automatically filters which announcements a user can see based on their role.
+Announcements are time-bounded messages broadcast to specific role audiences. The server automatically filters which announcements a user can see based on their role.
 
 ### `GET /api/v1/announcements`
 
@@ -300,7 +429,7 @@ Returns all active announcements visible to the authenticated user based on thei
 
 ### `POST /api/v1/announcements`
 
-Creates a new announcement and broadcasts a `announcement_created` realtime event to all connected WebSocket clients matching the audience.
+Creates a new announcement and broadcasts an `announcement_created` realtime event to all connected WebSocket clients matching the audience.
 
 **Auth:** `ADMIN` or `HR_OPERATIONS` role required.
 
@@ -329,7 +458,7 @@ Creates a new announcement and broadcasts a `announcement_created` realtime even
 </ParamField>
 
 <Tip>
-  When `is_active` is `true`, a `announcement_created` WebSocket event is automatically pushed to all connected clients whose role matches the `audience` value.
+  When `is_active` is `true`, an `announcement_created` WebSocket event is automatically pushed to all connected clients whose role matches the `audience` value.
 </Tip>
 
 ```json Example Request Body
@@ -358,6 +487,37 @@ Returns a limited list of active, non-expired announcements for dashboard panels
 <ParamField query="include_expired" type="boolean">
   When `true`, also returns expired announcements. Defaults to `false`.
 </ParamField>
+
+---
+
+### `GET /api/v1/announcements/all`
+
+Returns all announcements regardless of active/expired status or audience. Intended for admin management views.
+
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+<ResponseField name="[]" type="array">
+  All `AnnouncementRead` objects ordered by creation time descending.
+</ResponseField>
+
+---
+
+### `PATCH /api/v1/announcements/{announcement_id}`
+
+Update or archive an existing announcement. Only provided fields are changed.
+
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+<ParamField path="announcement_id" type="string" required>
+  UUID of the announcement to update.
+</ParamField>
+
+<ParamField body="title" type="string">Updated headline.</ParamField>
+<ParamField body="content" type="string">Updated body text.</ParamField>
+<ParamField body="audience" type="string">Updated audience. Must be a valid audience string.</ParamField>
+<ParamField body="start_date" type="string">Updated start date ISO `YYYY-MM-DD`.</ParamField>
+<ParamField body="end_date" type="string">Updated end date ISO `YYYY-MM-DD`.</ParamField>
+<ParamField body="is_active" type="boolean">Set to `false` to archive the announcement.</ParamField>
 
 ---
 
@@ -399,6 +559,8 @@ Returns the list of permission keys assigned to a specific role.
   Role identifier, e.g. `admin`, `manager`, `employee`.
 </ParamField>
 
+<ResponseField name="[]" type="array">Sorted list of permission key strings assigned to the role.</ResponseField>
+
 ---
 
 ### `POST /api/v1/permissions/user-override`
@@ -419,6 +581,8 @@ Grants or revokes a specific permission for an individual user, overriding their
   `true` to grant, `false` to revoke. Defaults to `true`.
 </ParamField>
 
+<ResponseField name="message" type="string">Confirmation message indicating the action taken and the affected user.</ResponseField>
+
 ---
 
 ### `GET /api/v1/permissions/user/{user_id}`
@@ -427,9 +591,25 @@ Returns the full resolved permission set for a user, merging their role permissi
 
 **Auth:** `permissions.manage` permission required.
 
+<ParamField path="user_id" type="string" required>
+  UUID of the user to inspect.
+</ParamField>
+
 <ResponseField name="user_id" type="string" />
 <ResponseField name="role" type="string" />
 <ResponseField name="permissions" type="array">Sorted list of granted permission key strings.</ResponseField>
+
+```json Example Response
+{
+  "user_id": "a1b2c3d4-...",
+  "role": "manager",
+  "permissions": [
+    "analytics.view_team",
+    "attendance.view_team",
+    "reports.view_team"
+  ]
+}
+```
 
 ---
 

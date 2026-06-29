@@ -1,7 +1,7 @@
 ---
-title: "Roles and Permissions: RBAC Model Explained"
+title: "RBAC Roles and Permissions: Six-Role Hierarchy Guide"
 sidebarTitle: "Roles & Permissions"
-description: "Detailed breakdown of the six-level role hierarchy, per-role capabilities and data visibility, the full permissions matrix, and hierarchical scoping rules."
+description: "Detailed breakdown of the six-level role hierarchy, per-role capabilities and data visibility, permissions matrix, and hierarchical scoping rules."
 ---
 
 The Workforce OS enforces a Role-Based Access Control (RBAC) model combined with hierarchical scope checks to ensure data security and operational integrity. Every API route is protected by FastAPI dependencies that verify both the caller's role and their ownership or reporting scope before any data is returned or mutated.
@@ -39,15 +39,15 @@ Admin  →  HR / Operations  →  Manager  →  Team Lead  →  Employee  →  I
     **Purpose**: Operational management of the workforce.
 
     **Key Actions**:
-    - Manage user profiles and onboarding workflows.
+    - Manage user profiles and onboarding workflows (create, edit, deactivate accounts).
     - Configure departments, shifts, and holiday calendars.
     - Create and publish company-wide announcements.
     - Generate organisation-wide reports (attendance, leaves, performance).
     - Monitor system alerts and approve attendance corrections.
 
-    **Data Visibility**: **Global** — all employee data except sensitive technical/system settings restricted to Admin.
+    **Data Visibility**: **Global** — all employee data except sensitive system settings restricted to Admin (e.g., `users.suspend`, `users.manage_roles`, `audit.view`, `permissions.manage`).
 
-    **Permissions**: `users.*` (no deactivate/suspend/roles), `attendance.*`, `leave.*`, `reports.*`, `announcements.create`, `holidays.manage`, `shifts.manage`, `departments.manage`, `analytics.view_org`.
+    **Permissions**: `users.view_all`, `users.create`, `users.edit`, `users.deactivate`, `attendance.*`, `leave.*`, `reports.*`, `announcements.create`, `holidays.manage`, `shifts.manage`, `departments.manage`, `eod.submit`, `analytics.view_team`, `analytics.view_org`.
   </Tab>
   <Tab title="Manager">
     **Purpose**: Team-level execution and workload management.
@@ -62,7 +62,7 @@ Admin  →  HR / Operations  →  Manager  →  Team Lead  →  Employee  →  I
 
     **Data Visibility**: **Scoped to direct and indirect reports** within their assigned departments.
 
-    **Permissions**: `users.create`, `users.edit`, `attendance.view_team`, `attendance.approve_correction`, `leave.approve`, `projects.approve`, `tasks.create_team`, `tasks.set_complexity`, `eod.approve`, `reports.view_team`, `analytics.view_team`.
+    **Permissions**: `users.create`, `users.edit`, `attendance.view_team`, `attendance.approve_correction`, `leave.approve`, `projects.create`, `projects.approve`, `tasks.create_team`, `tasks.set_priority`, `tasks.set_complexity`, `eod.approve`, `reports.view_team`, `analytics.view_team`.
   </Tab>
   <Tab title="Team Lead">
     **Purpose**: First-level supervision and technical guidance.
@@ -74,7 +74,7 @@ Admin  →  HR / Operations  →  Manager  →  Team Lead  →  Employee  →  I
 
     **Data Visibility**: **Scoped to their assigned team members** only.
 
-    **Permissions**: `attendance.view_team`, `leave.view_team`, `projects.create`, `tasks.create_team`, `tasks.set_priority`, `tasks.view_team`, `eod.review`, `reports.view_team`, `analytics.view_team`.
+    **Permissions**: `attendance.view_team`, `leave.view_team`, `projects.create`, `tasks.create_own`, `tasks.create_team`, `tasks.set_priority`, `tasks.view_team`, `eod.submit`, `eod.review`, `reports.view_team`, `analytics.view_team`.
   </Tab>
   <Tab title="Employee">
     **Purpose**: Individual work execution and accountability.
@@ -99,14 +99,14 @@ Admin  →  HR / Operations  →  Manager  →  Team Lead  →  Employee  →  I
     **Permissions** (`BASIC_EMPLOYEE_RESTRICTED` bundle): `attendance.view_own`, `leave.apply`, `tasks.create_own`, `eod.submit`, `reports.view_own`.
 
     <Note>
-      `Intern` and `Junior Employee` share an identical permission bundle (`BASIC_EMPLOYEE_RESTRICTED`) defined in `apps/api/app/core/permissions.py`.
+      `Intern` and `Junior Employee` share an identical permission bundle (`BASIC_EMPLOYEE_RESTRICTED`) defined in `apps/api/app/core/permissions.py`. Note that `projects.create` is **not** included in this bundle — unlike the Employee role.
     </Note>
   </Tab>
 </Tabs>
 
 ## Permissions Matrix
 
-The table below summarises the most commonly checked permission keys across all functional areas. `✅` = granted, `❌` = denied, `⚠️` = own-data or limited scope only, `👁️` = view-only.
+The table below summarises the most commonly checked permission keys across all functional areas. `✅` = granted, `❌` = denied, `⚠️` = own-data or limited scope only, `👁️` = view-only (UI-level, no explicit permission key).
 
 | Permission Key | Admin | HR/Ops | Manager | Team Lead | Employee | Intern |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -124,17 +124,17 @@ The table below summarises the most commonly checked permission keys across all 
 | `leave.approve` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
 | `leave.view_team` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | `leave.view_org` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| `projects.create` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `projects.approve` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `projects.create` | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| `projects.approve` | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
 | `projects.view_all` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| `tasks.create_own` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `tasks.create_team` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `tasks.set_priority` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `tasks.set_complexity` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| `tasks.view_team` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `tasks.create_own` | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| `tasks.create_team` | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| `tasks.set_priority` | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| `tasks.set_complexity` | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| `tasks.view_team` | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
 | `eod.submit` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `eod.review` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `eod.approve` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `eod.review` | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| `eod.approve` | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
 | `reports.view_own` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `reports.view_team` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | `reports.view_org` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |

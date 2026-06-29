@@ -1,7 +1,7 @@
 ---
 title: "Authentication and Session Management in Workforce OS"
 sidebarTitle: "Authentication"
-description: "JWT access and refresh token flows, account invitation, password reset, security states, frontend auth guards, rate limiting, and common debugging steps."
+description: "JWT login and refresh flows, account activation, password reset, security states, frontend auth guards, rate limiting, and debugging steps."
 ---
 
 The Workforce OS uses a secure JWT-based authentication mechanism designed for long-lived sessions while minimising the risk of credential exposure. Every protected API route requires a valid, unexpired access token; the refresh token mechanism lets the frontend silently renew sessions without interrupting the user's workflow.
@@ -125,10 +125,24 @@ Both tokens are signed with `HS256` using `APP_SECRET_KEY`. Access tokens embed 
     An Admin or HR/Ops user creates a new account. The record is saved with `status=invited` and an invitation email containing a unique, time-limited activation token is dispatched via the Celery email worker.
   </Step>
   <Step title="User Clicks the Activation Link">
-    The email links to `/activate?token=<activation_token>`. This route is **public** and must not enforce the `AuthContext` auth guard — the user does not yet have a session.
+    The email links to the frontend activation page (`/activate?token=<activation_token>`). This route is **public** and must not enforce the `AuthContext` auth guard — the user does not yet have a session.
   </Step>
   <Step title="User Sets Password">
-    The activation page prompts for a new password. On submission the backend verifies the token, hashes the password with BCrypt, sets `status=active`, and invalidates the activation token.
+    The activation page prompts for a new password. On submission, the frontend calls the backend activation endpoint:
+
+    ```http
+    POST /api/v1/auth/activate-account
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "token": "<activation_token>",
+      "password": "NewS3cureP@ss!"
+    }
+    ```
+
+    The backend verifies the token, hashes the password with BCrypt, sets `status=active`, and invalidates the activation token.
   </Step>
   <Step title="Redirect to Login">
     The user is redirected to `/login` where they can sign in with their new credentials.
@@ -143,10 +157,10 @@ Both tokens are signed with `HS256` using `APP_SECRET_KEY`. Access tokens embed 
 
 <Steps>
   <Step title="Request Reset">
-    The user enters their email on the Forgot Password page, which calls `POST /api/v1/auth/forgot-password`. The backend generates a `PasswordResetToken` and sends a reset email.
+    The user enters their email on the Forgot Password page, which calls `POST /api/v1/auth/forgot-password`. The backend generates a `PasswordResetToken` and sends a reset email. The response is intentionally vague to prevent user enumeration.
   </Step>
   <Step title="Submit New Password">
-    The user follows the reset link (`/reset-password?token=...`) and submits a new password. The backend validates the token, hashes the new password, and persists the update.
+    The user follows the reset link (`/reset-password?token=...`) and submits a new password via `POST /api/v1/auth/reset-password`. The backend validates the token, hashes the new password, and persists the update.
   </Step>
   <Step title="Token Invalidation">
     The reset token is marked as used immediately after a successful password change. Attempting to reuse the same token returns an error.

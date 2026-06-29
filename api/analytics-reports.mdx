@@ -1,10 +1,10 @@
 ---
-title: "REST API Endpoints for Dashboards and Reports"
-sidebarTitle: "Analytics"
-description: "Fetch role-scoped KPI dashboards, attendance reports, org-wide analytics, and growth metrics — all protected by JWT and permission checks."
+title: "Analytics, Dashboards & Reports REST API Reference"
+sidebarTitle: "Analytics & Reports"
+description: "Fetch role-scoped KPI dashboards, team and org-wide analytics tabs, burnout and workload signals, and date-range performance reports — all JWT-protected."
 ---
 
-The analytics and reporting surface of the Workforce Intelligence OS is split into three layers: per-user employee dashboards, manager team views, and admin org-wide health panels. Every endpoint is protected by a valid JWT and enforces role or permission checks before returning data. All paths are prefixed with `/api/v1`.
+The analytics and reporting surface of the Workforce Intelligence OS is split into four layers: per-user employee dashboards, manager team views, admin org-wide health panels, and a dedicated analytics router for deeper performance signals. Every endpoint is protected by a valid JWT and enforces role or permission checks before returning data. All paths are prefixed with `/api/v1`.
 
 <Note>
   All analytics endpoints require an `Authorization: Bearer <token>` header. Requests without a valid token receive `401 AUTH_ERROR`.
@@ -18,7 +18,7 @@ The analytics and reporting surface of the Workforce Intelligence OS is split in
 
 Returns KPI cards and live session state for the currently authenticated employee. Any active role may call this endpoint.
 
-**Auth:** Any authenticated user (`get_current_user`)
+**Auth:** Any authenticated user (`get_current_user`).
 
 <ResponseField name="attendance" type="object" required>
   Current shift attendance summary.
@@ -118,27 +118,6 @@ Returns team attendance, pending approval counts, and overdue/blocked task summa
 <ResponseField name="blocked_tasks_count" type="integer">Blocked tasks across the team.</ResponseField>
 <ResponseField name="team_members_active" type="integer">Number of team members currently checked in.</ResponseField>
 
-```json Example Response
-{
-  "team_attendance_today": [
-    {
-      "user_id": "a1b2c3d4-...",
-      "full_name": "Fatima Malik",
-      "checked_in": true,
-      "work_mode": "WFH",
-      "check_in_at": "2025-01-20T09:10:00Z"
-    }
-  ],
-  "pending_approvals_count": 4,
-  "overdue_tasks_count": 2,
-  "blocked_tasks_count": 1,
-  "team_members_active": 7,
-  "pending_approvals": 4,
-  "overdue_tasks": 2,
-  "blocked_tasks": 1
-}
-```
-
 ---
 
 ## Admin Dashboard
@@ -179,7 +158,7 @@ Returns organisation-wide health metrics including headcount, attendance breakdo
 
 ### `GET /api/v1/dashboard/admin/analytics`
 
-Delivers a rich analytics payload for the admin dashboard: KPIs, 7-day attendance trends, task and project statistics, per-department comparison, people exceptions, and recent activity.
+Delivers a rich analytics payload for the admin overview tab: KPIs, 7-day attendance trends, task and project statistics, per-department comparison, people exceptions, and recent activity.
 
 **Auth:** `ADMIN` role required.
 
@@ -218,11 +197,305 @@ Delivers a rich analytics payload for the admin dashboard: KPIs, 7-day attendanc
 
 ---
 
-## Attendance Reports
+### `GET /api/v1/dashboard/admin/users-analytics`
 
-### `GET /api/v1/reports/attendance`
+Returns the Users tab analytics payload: employee roster, role distribution, department distribution, attendance-by-department breakdowns, and individual performance metrics.
 
-Returns team or org-wide attendance aggregations for a date range. The response content depends on the caller's role. Manager/HR users see their scoped team; Admins see the full organisation.
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+<ResponseField name="business_date" type="string">The current business date in `YYYY-MM-DD` format (Asia/Karachi timezone).</ResponseField>
+<ResponseField name="timezone" type="string">Always `"Asia/Karachi"`.</ResponseField>
+<ResponseField name="summary" type="object">
+  High-level user counts.
+  <Expandable title="UsersAnalyticsSummary fields">
+    <ResponseField name="total_employees" type="integer" />
+    <ResponseField name="active_employees" type="integer" />
+    <ResponseField name="admins" type="integer" />
+    <ResponseField name="managers" type="integer" />
+    <ResponseField name="employees" type="integer" />
+    <ResponseField name="interns" type="integer" />
+    <ResponseField name="present_today" type="integer" />
+    <ResponseField name="late_today" type="integer" />
+    <ResponseField name="on_leave" type="integer" />
+    <ResponseField name="wfh_today" type="integer" />
+    <ResponseField name="new_users_this_month" type="integer" />
+  </Expandable>
+</ResponseField>
+<ResponseField name="role_distribution" type="array">Label/count pairs per role.</ResponseField>
+<ResponseField name="department_distribution" type="array">Label/count pairs per department.</ResponseField>
+<ResponseField name="attendance_by_department" type="array">Per-department attendance rate, headcount, late count.</ResponseField>
+<ResponseField name="employee_roster" type="array">Full employee activity roster including attendance status, task counts, and logged hours.</ResponseField>
+<ResponseField name="employee_performance" type="array">Per-employee performance index, attendance rate, and risk flags.</ResponseField>
+
+---
+
+### `GET /api/v1/dashboard/admin/user-management-overview`
+
+Alias for `admin/users-analytics`. Returns the same `UsersAnalyticsDashboard` payload — provided for frontend route compatibility.
+
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+---
+
+### `GET /api/v1/dashboard/admin/communication-analytics`
+
+Returns the Communication tab analytics payload: messaging activity, meeting summaries, announcement counts, and support ticket overviews.
+
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+<ResponseField name="summary" type="object">
+  <Expandable title="CommunicationAnalyticsSummary fields">
+    <ResponseField name="unread_messages" type="integer" />
+    <ResponseField name="active_conversations" type="integer" />
+    <ResponseField name="meetings_today" type="integer" />
+    <ResponseField name="upcoming_meetings" type="integer" />
+    <ResponseField name="announcements_this_week" type="integer" />
+    <ResponseField name="open_support_tickets" type="integer" />
+  </Expandable>
+</ResponseField>
+<ResponseField name="messages_by_day" type="array">Daily message volume trend (date + count).</ResponseField>
+<ResponseField name="meetings_by_week" type="array">Weekly meeting counts as label/count pairs.</ResponseField>
+<ResponseField name="support_tickets_by_status" type="array">Ticket distribution by status.</ResponseField>
+<ResponseField name="recent_conversations" type="array">Latest active conversations with participant count and unread flag.</ResponseField>
+<ResponseField name="upcoming_meetings" type="array">Scheduled meetings starting soonest.</ResponseField>
+<ResponseField name="recent_announcements" type="array">Recently published announcements.</ResponseField>
+<ResponseField name="support_tickets" type="array">Recent open support ticket summaries.</ResponseField>
+
+---
+
+### `GET /api/v1/dashboard/admin/projects-tasks-analytics`
+
+Returns the Projects & Tasks tab analytics payload: task status distribution, project progress, and detailed project/task tables.
+
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+<ResponseField name="summary" type="object">
+  <Expandable title="ProjectsTasksSummary fields">
+    <ResponseField name="total_projects" type="integer" />
+    <ResponseField name="active_projects" type="integer" />
+    <ResponseField name="completed_projects" type="integer" />
+    <ResponseField name="blocked_projects" type="integer" />
+    <ResponseField name="active_tasks" type="integer" />
+    <ResponseField name="overdue_tasks" type="integer" />
+    <ResponseField name="completed_tasks" type="integer" />
+    <ResponseField name="pending_tasks" type="integer" />
+  </Expandable>
+</ResponseField>
+<ResponseField name="task_status_distribution" type="array">Label/count pairs per task status.</ResponseField>
+<ResponseField name="task_priority_distribution" type="array">Label/count pairs per task priority.</ResponseField>
+<ResponseField name="project_progress" type="array">Project completion percentage distribution.</ResponseField>
+<ResponseField name="tasks_by_department" type="array">Task counts per department.</ResponseField>
+<ResponseField name="projects" type="array">Project table rows with team size, status, and progress.</ResponseField>
+<ResponseField name="tasks" type="array">Task table rows with assignee, priority, status, and logged minutes.</ResponseField>
+
+---
+
+## Manager Analytics Tabs
+
+### `GET /api/v1/dashboard/manager/overview`
+
+Returns the manager's overview tab: KPIs, 7-day attendance trend, team health score, pending actions, and upcoming meetings.
+
+**Auth:** `MANAGER` or `ADMIN` role required.
+
+<ResponseField name="kpis" type="object">
+  <Expandable title="ManagerOverviewKPIs fields">
+    <ResponseField name="team_members" type="integer" />
+    <ResponseField name="present_today" type="integer" />
+    <ResponseField name="pending_approvals" type="integer" />
+    <ResponseField name="active_tasks" type="integer" />
+    <ResponseField name="overdue_tasks" type="integer" />
+    <ResponseField name="projects_in_progress" type="integer" />
+    <ResponseField name="eod_reports_pending" type="integer" />
+    <ResponseField name="team_workload" type="integer" />
+  </Expandable>
+</ResponseField>
+<ResponseField name="attendance_trend" type="array">7-day team attendance trend (date, checked_in, late, absent).</ResponseField>
+<ResponseField name="team_health" type="object">Score (0–100), label, blocked/overdue counts, and active member count.</ResponseField>
+<ResponseField name="pending_actions" type="array">Prioritised list of actionable items with route hints.</ResponseField>
+<ResponseField name="recent_activity" type="array">Recent team activity log entries.</ResponseField>
+<ResponseField name="members_needing_attention" type="array">Team members flagged for exceptions.</ResponseField>
+<ResponseField name="upcoming_meetings" type="array">Team meetings starting soonest.</ResponseField>
+
+---
+
+### `GET /api/v1/dashboard/manager/team-analytics`
+
+Returns the manager's Team tab: per-member attendance, workload distribution, task completion metrics, and the employee roster and performance tables.
+
+**Auth:** `MANAGER` or `ADMIN` role required.
+
+<ResponseField name="summary" type="object">Team headcount, checked-in count, late count, on-leave count, WFH count, and high-workload member count.</ResponseField>
+<ResponseField name="attendance_by_member" type="array">Per-member attendance label/count pairs.</ResponseField>
+<ResponseField name="workload_distribution" type="array">Task workload per team member.</ResponseField>
+<ResponseField name="task_completion_by_member" type="array">Completed-task counts per member.</ResponseField>
+<ResponseField name="logged_hours_trend" type="array">Daily logged-hours trend over the last 7 days.</ResponseField>
+<ResponseField name="employee_roster" type="array">Full activity roster for direct reports.</ResponseField>
+<ResponseField name="employee_performance" type="array">Per-member performance index and risk flags.</ResponseField>
+
+---
+
+### `GET /api/v1/dashboard/manager/approvals-analytics`
+
+Returns the manager's Approvals tab: pending leave requests, pending attendance corrections, and weekly approval throughput.
+
+**Auth:** `MANAGER` or `ADMIN` role required.
+
+<ResponseField name="summary" type="object">Counts of pending leaves, WFH requests, attendance corrections, pending EODs, approvals this week, and rejections this week.</ResponseField>
+<ResponseField name="pending_leaves" type="array">Leave requests awaiting this manager's decision.</ResponseField>
+<ResponseField name="pending_corrections" type="array">Attendance correction requests awaiting decision.</ResponseField>
+
+---
+
+### `GET /api/v1/dashboard/manager/projects-tasks-analytics`
+
+Returns the manager's Projects & Tasks tab, scoped to the manager's direct reports.
+
+**Auth:** `MANAGER` or `ADMIN` role required.
+
+Returns the same `ProjectsTasksAnalyticsDashboard` schema as the admin version, filtered to the manager's team scope.
+
+---
+
+### `GET /api/v1/dashboard/manager/eod-reports-analytics`
+
+Returns the manager's EOD & Reports tab: EOD submission status, productivity trend, and per-member report rows.
+
+**Auth:** `MANAGER` or `ADMIN` role required.
+
+<ResponseField name="summary" type="object">
+  <Expandable title="ManagerEodSummary fields">
+    <ResponseField name="submitted_today" type="integer" />
+    <ResponseField name="pending_reviews" type="integer" />
+    <ResponseField name="average_productivity" type="number" />
+    <ResponseField name="blockers_reported" type="integer" />
+    <ResponseField name="team_logged_hours" type="number" />
+    <ResponseField name="missing_eods" type="integer" />
+  </Expandable>
+</ResponseField>
+<ResponseField name="reports" type="array">Per-member EOD report rows including attendance status, logged hours, and review status.</ResponseField>
+<ResponseField name="productivity_trend" type="array">Daily productivity score distribution.</ResponseField>
+<ResponseField name="blocker_trend" type="array">Daily blocker count trend.</ResponseField>
+
+---
+
+## Analytics Signals
+
+### `GET /api/v1/analytics/best-performers`
+
+Returns a ranked list of top-performing employees based on task completion and attendance consistency. Requires `analytics.view_org` permission.
+
+**Auth:** `analytics.view_org` permission required.
+
+<ResponseField name="[]" type="array">
+  Array of `BestPerformer` objects.
+  <Expandable title="BestPerformer fields">
+    <ResponseField name="user_id" type="string">UUID of the employee.</ResponseField>
+    <ResponseField name="full_name" type="string" />
+    <ResponseField name="score" type="number">Composite performance score.</ResponseField>
+    <ResponseField name="completed_tasks" type="integer">Count of completed tasks in the scoring window.</ResponseField>
+    <ResponseField name="attendance_consistency" type="number">Attendance consistency score (0–1).</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### `GET /api/v1/analytics/workload-balance`
+
+Returns per-employee workload distribution and overload flags. Accessible to users with `analytics.view_org` or `analytics.view_team`.
+
+**Auth:** `analytics.view_org` or `analytics.view_team` permission required.
+
+<ResponseField name="[]" type="array">
+  Array of `WorkloadBalance` objects.
+  <Expandable title="WorkloadBalance fields">
+    <ResponseField name="user_id" type="string">UUID of the employee.</ResponseField>
+    <ResponseField name="full_name" type="string" />
+    <ResponseField name="active_tasks" type="integer">Number of currently active tasks assigned.</ResponseField>
+    <ResponseField name="overloaded" type="boolean">Whether the employee exceeds the workload threshold.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### `GET /api/v1/analytics/burnout-risks`
+
+Returns employees exhibiting burnout risk signals based on consecutive high-hour working days. Requires `analytics.view_org` permission.
+
+**Auth:** `analytics.view_org` permission required.
+
+<ResponseField name="[]" type="array">
+  Array of `BurnoutRisk` objects.
+  <Expandable title="BurnoutRisk fields">
+    <ResponseField name="user_id" type="string">UUID of the employee.</ResponseField>
+    <ResponseField name="full_name" type="string" />
+    <ResponseField name="consecutive_high_hour_days" type="integer">Days in a row with above-threshold logged hours.</ResponseField>
+    <ResponseField name="risk_level" type="string">One of `Low`, `Medium`, `High`.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Warning>
+  This endpoint only returns employees flagged above the low-risk threshold. Employees with no risk signals are omitted from the response.
+</Warning>
+
+---
+
+### `GET /api/v1/analytics/productivity-trend/{user_id}`
+
+Returns a time-series of daily productivity scores for a specific user. The authenticated user may always view their own trend; managers and admins may view any user in their scope.
+
+**Auth:** Any authenticated user. Caller must have view access to the target user.
+
+<ParamField path="user_id" type="string" required>
+  UUID of the employee whose trend to fetch.
+</ParamField>
+
+<ResponseField name="[]" type="array">
+  Array of `ProductivityTrend` objects.
+  <Expandable title="ProductivityTrend fields">
+    <ResponseField name="date" type="string">ISO date string `YYYY-MM-DD`.</ResponseField>
+    <ResponseField name="score" type="number">Productivity score for that day.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Example Response
+[
+  { "date": "2025-01-14", "score": 82.5 },
+  { "date": "2025-01-15", "score": 91.0 },
+  { "date": "2025-01-16", "score": 74.3 }
+]
+```
+
+---
+
+## Reports
+
+### `GET /api/v1/reports/employee`
+
+Returns the authenticated user's personal performance report for a specified date range.
+
+**Auth:** Any authenticated user.
+
+<ParamField query="start_date" type="string" required>
+  Report start date — ISO format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField query="end_date" type="string" required>
+  Report end date — ISO format `YYYY-MM-DD`.
+</ParamField>
+
+<ResponseField name="user_id" type="string">UUID of the employee.</ResponseField>
+<ResponseField name="full_name" type="string" />
+<ResponseField name="attendance_days" type="integer">Days with a completed attendance session.</ResponseField>
+<ResponseField name="late_days" type="integer" />
+<ResponseField name="wfh_days" type="integer" />
+<ResponseField name="total_logged_hours" type="number" />
+
+---
+
+### `GET /api/v1/reports/manager`
+
+Returns performance reports for all team members scoped to the authenticated manager's direct reports. Admins see the full organisation.
 
 **Auth:** `MANAGER`, `HR_OPERATIONS`, or `ADMIN` role required.
 
@@ -234,77 +507,115 @@ Returns team or org-wide attendance aggregations for a date range. The response 
   Report end date — ISO format `YYYY-MM-DD`.
 </ParamField>
 
-<ResponseField name="[]" type="array">
-  Array of `WeeklyReportRead` objects — one per scoped team member.
-  <Expandable title="WeeklyReportRead fields">
-    <ResponseField name="user_id" type="string">UUID of the employee.</ResponseField>
-    <ResponseField name="full_name" type="string" />
-    <ResponseField name="attendance_days" type="integer">Days with a completed attendance session.</ResponseField>
-    <ResponseField name="late_days" type="integer" />
-    <ResponseField name="wfh_days" type="integer" />
-    <ResponseField name="total_logged_hours" type="number" />
-  </Expandable>
-</ResponseField>
-
-```bash Example Request
-GET /api/v1/reports/attendance?start_date=2025-01-13&end_date=2025-01-19
-Authorization: Bearer <token>
-```
-
-<Note>
-  A separate **export** endpoint at `GET /api/v1/reports/team-performance/export` streams a CSV file of the same data with query parameters `period`, `start_date`, `end_date`, `department_id`, and `role`.
-</Note>
+<ResponseField name="[]" type="array">Array of `WeeklyReportRead` objects — one per scoped team member.</ResponseField>
 
 ---
 
-## Growth Metrics
+### `GET /api/v1/reports/hr`
 
-### `GET /api/v1/growth/goals`
+Returns performance report aggregations for all employees in the organisation, scoped to HR.
 
-Lists personal goals for the authenticated user.
+**Auth:** `HR_OPERATIONS` or `ADMIN` role required.
 
-### `GET /api/v1/growth/achievements`
+<ParamField query="start_date" type="string" required>ISO format `YYYY-MM-DD`.</ParamField>
+<ParamField query="end_date" type="string" required>ISO format `YYYY-MM-DD`.</ParamField>
 
-Lists earned achievement badges for the authenticated user.
+<ResponseField name="[]" type="array">Array of `WeeklyReportRead` objects for the full org.</ResponseField>
 
-**Auth:** Any authenticated user.
+---
 
-<ResponseField name="[]" type="array">
-  Array of achievement objects.
-  <Expandable title="AchievementRead fields">
-    <ResponseField name="id" type="string">UUID.</ResponseField>
-    <ResponseField name="user_id" type="string" />
-    <ResponseField name="badge_name" type="string" />
-    <ResponseField name="title" type="string" />
-    <ResponseField name="description" type="string | null" />
-    <ResponseField name="icon_name" type="string | null" />
-    <ResponseField name="date" type="string">ISO-8601 datetime of award.</ResponseField>
-  </Expandable>
-</ResponseField>
+### `GET /api/v1/reports/admin`
 
-### `GET /api/v1/growth/team`
+Returns organisation-wide performance report data for the admin. Identical in structure to the HR report but restricted to `ADMIN` role.
 
-Returns growth and achievement records for the manager's direct reports (or all employees for Admins).
+**Auth:** `ADMIN` role required.
 
-**Auth:** Any authenticated user — result scope is role-dependent.
+<ParamField query="start_date" type="string" required>ISO format `YYYY-MM-DD`.</ParamField>
+<ParamField query="end_date" type="string" required>ISO format `YYYY-MM-DD`.</ParamField>
 
-```json Example Achievement Response
-{
-  "id": "f1e2d3c4-...",
-  "user_id": "a1b2c3d4-...",
-  "badge_name": "Streak Master",
-  "title": "Streak Master",
-  "description": "Checked in on time for 30 consecutive days",
-  "icon_name": "flame",
-  "date": "2025-01-18T08:00:00Z"
-}
+---
+
+### `GET /api/v1/reports/team-performance`
+
+Returns a paginated, filterable team performance report. Supports date range anchoring via a `period` mode or explicit `start_date`/`end_date`.
+
+**Auth:** `MANAGER`, `HR_OPERATIONS`, or `ADMIN` role required.
+
+<ParamField query="period" type="string">
+  One of `daily`, `weekly`, `monthly`, or `custom`. Defaults to `weekly`.
+</ParamField>
+
+<ParamField query="date" type="string">
+  Anchor date for daily/weekly/monthly periods. ISO format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField query="start_date" type="string">
+  Explicit start date for `custom` period. ISO format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField query="end_date" type="string">
+  Explicit end date for `custom` period. ISO format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField query="search" type="string">
+  Filter by employee name, email, role, department, or designation.
+</ParamField>
+
+<ParamField query="department_id" type="string">
+  Filter by department UUID.
+</ParamField>
+
+<ParamField query="role" type="string">
+  Filter by role string.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number (1-based). Omit for unpaginated results.
+</ParamField>
+
+<ParamField query="page_size" type="integer">
+  Rows per page. Min `1`, max `200`.
+</ParamField>
+
+<ResponseField name="start_date" type="string">Effective start date of the report period.</ResponseField>
+<ResponseField name="end_date" type="string">Effective end date of the report period.</ResponseField>
+<ResponseField name="rows" type="array">Per-employee rows with hours, task counts, attendance breakdowns, and EOD status.</ResponseField>
+
+```bash Example Request
+GET /api/v1/reports/team-performance?period=weekly&date=2025-01-20&page=1&page_size=25
+Authorization: Bearer <token>
+```
+
+---
+
+### `GET /api/v1/reports/team-performance/export`
+
+Streams the team performance report as a CSV file. Accepts the same filter parameters as `team-performance` but returns all rows (no pagination). The response has `Content-Type: text/csv` and a `Content-Disposition: attachment` header.
+
+**Auth:** `MANAGER`, `HR_OPERATIONS`, or `ADMIN` role required.
+
+<ParamField query="period" type="string">One of `daily`, `weekly`, `monthly`, `custom`. Defaults to `weekly`.</ParamField>
+<ParamField query="date" type="string">Anchor date ISO `YYYY-MM-DD`.</ParamField>
+<ParamField query="start_date" type="string">Explicit start date for custom period.</ParamField>
+<ParamField query="end_date" type="string">Explicit end date for custom period.</ParamField>
+<ParamField query="search" type="string">Name/email/role filter.</ParamField>
+<ParamField query="department_id" type="string">Filter by department UUID.</ParamField>
+<ParamField query="role" type="string">Filter by role string.</ParamField>
+
+<Note>
+  The exported CSV includes columns: Employee Name, Email, Role, Department, Designation, Hours, Tasks Worked On, Completed Tasks, Late, Early, WFH, Absences, EOD Status, Date Range.
+</Note>
+
+```bash Example Request
+GET /api/v1/reports/team-performance/export?period=weekly&date=2025-01-20
+Authorization: Bearer <token>
 ```
 
 ---
 
 ## Error Responses
 
-All analytics endpoints share the standard error envelope:
+All analytics and reports endpoints share the standard error envelope:
 
 ```json
 {
@@ -319,5 +630,6 @@ All analytics endpoints share the standard error envelope:
 | HTTP Status | Code | Reason |
 |---|---|---|
 | `401` | `AUTH_ERROR` | Missing or invalid JWT |
-| `403` | `PERMISSION_ERROR` | Insufficient role |
+| `403` | `PERMISSION_ERROR` | Insufficient role or permission |
+| `422` | `VALIDATION_ERROR` | Invalid date range or query parameters |
 | `500` | `INTERNAL_ERROR` | Service computation failure |

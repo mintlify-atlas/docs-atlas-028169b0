@@ -1,7 +1,7 @@
 ---
-title: "Messaging, Calls, Meetings, and Notifications"
+title: "Direct Messaging, Video Calls, Meetings, and Notifications"
 sidebarTitle: "Communication"
-description: "Complete reference for direct messages, group channels, WebRTC calls, call recordings, meeting invitations, announcements, and push notification preferences."
+description: "Direct messages, group channels, WebRTC calls, meeting invitations, announcements, and push notification preferences for the workforce platform."
 ---
 
 The Communication module connects every layer of the workforce — from quick direct messages between two colleagues to org-wide announcements from HR. All real-time events flow over WebSocket connections managed by the platform's `RealtimeService`, while push notifications reach users on mobile (Expo) and desktop browsers (Web Push VAPID) even when they are offline.
@@ -127,7 +127,7 @@ SDP offers/answers and ICE candidates are relayed through the backend's signalin
 POST /messages/calls/{call_id}/signal     # Write offer / answer / ice_candidate
 GET  /messages/calls/{call_id}/signals    # Pull and consume pending signals
 GET  /messages/calls/incoming             # Check for active ringing call
-GET  /messages/calls/history             # Caller's call history (last 100)
+GET  /messages/calls/history              # Caller's call history (last 100)
 ```
 
 Each signal record is consumed (marked with `consumed_at`) when polled, preventing duplicate delivery.
@@ -151,9 +151,9 @@ GET    /admin/call-recordings/{id}/download # Download recording as attachment
 DELETE /admin/call-recordings/{id}          # Soft-delete recording
 ```
 
-<Info>
+<Note>
   Each admin access to a recording (view, stream, download, delete) writes an `AuditLog` entry with `entity_type="call_recording"` for accountability.
-</Info>
+</Note>
 
 The upload endpoint implements a smart replacement policy: a new video recording replaces an existing audio recording for the same call; a larger video replaces a smaller video; an audio recording never replaces an existing video.
 
@@ -288,6 +288,6 @@ Token registration is idempotent — re-registering the same token updates its m
 
 User online/away/offline status is maintained via **WebSocket heartbeats**. The `ws_manager` tracks active connection counts per user ID. The `UserOnlineEnricher` service attaches live `presence_status` values to participant user objects returned in `ConversationRead` responses, so the messaging UI can display accurate presence indicators without polling.
 
-<Info>
+<Note>
   Presence state is in-memory and connection-count based. A user with at least one active WebSocket connection is considered `online`. Disconnection triggers an `offline` state after the heartbeat window lapses.
-</Info>
+</Note>

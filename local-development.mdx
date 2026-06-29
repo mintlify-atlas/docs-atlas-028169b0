@@ -191,11 +191,6 @@ npx web-push generate-vapid-keys
     </CodeGroup>
 
     The API is available at `http://localhost:8080`. Swagger UI is at `http://localhost:8080/docs`.
-
-    Alternatively, you can start via the `main.py` entry point:
-    ```bash
-    python main.py
-    ```
   </Step>
 
 </Steps>
@@ -323,8 +318,8 @@ npx web-push generate-vapid-keys
 
 | Command | What it does |
 |---|---|
-| `uvicorn app.main:app --host 0.0.0.0 --port 8080` | Start the FastAPI server |
-| `alembic upgrade head` | Apply all pending migrations |
+| `uvicorn app.main:app --host 0.0.0.0 --port 8080` | Start the FastAPI server (from `apps/api`) |
+| `alembic upgrade head` | Apply all pending migrations (from `apps/api`) |
 | `alembic revision --autogenerate -m "description"` | Generate a new migration from model changes |
 | `flake8` | Run Python linting (from `apps/api`) |
 
@@ -369,7 +364,7 @@ npm run dev
 **Fix:**
 1. Start Redis: `redis-server` or `docker run -d -p 6379:6379 redis`
 2. Verify the `REDIS_URL` in your `.env` matches where Redis is listening:
-   ```bash .env
+   ```bash
    REDIS_URL=redis://localhost:6379/0
    ```
 
@@ -388,7 +383,7 @@ npm run dev
 **Cause:** `APP_SECRET_KEY` is still set to the placeholder value `change-me-locally` or is missing.
 
 **Fix:** Set a strong, unique secret in your `.env`:
-```bash .env
+```bash
 APP_SECRET_KEY=a-long-random-string-at-least-32-characters
 ```
 
@@ -399,6 +394,6 @@ APP_SECRET_KEY=a-long-random-string-at-least-32-characters
 **Cause:** The frontend's origin (`http://localhost:3000`) is not listed in `CORS_ORIGINS`.
 
 **Fix:** Ensure the frontend URL is included in `.env`:
-```bash .env
+```bash
 CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:3002,http://127.0.0.1:3000
 ```
