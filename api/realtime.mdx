@@ -1,0 +1,605 @@
+---
+title: "WebSocket, Presence, Notifications, and Messaging APIs"
+sidebarTitle: "Realtime"
+description: "Connect over WebSocket with a single-use ticket, track live presence state, manage in-app notifications, send messages, and schedule meetings with realtime push events."
+---
+
+The realtime layer of the Workforce Intelligence OS combines a persistent WebSocket channel with REST endpoints that write to and read from that same event pipeline. Every connected client receives server-initiated events — new messages, meeting invites, presence changes, notification counts — without polling. All REST paths are prefixed with `/api/v1`. The WebSocket endpoint lives at `/api/v1/ws`.
+
+<Note>
+  The WebSocket endpoint **does not** accept a JWT via query string. Direct `?token=` usage is rejected with close code `1008` (Policy Violation). You must first exchange a JWT for a short-lived **WS ticket** and pass that instead.
+</Note>
+
+---
+
+## Obtaining a WebSocket Ticket
+
+Before opening a WebSocket connection, the client must call the ticket-issuance endpoint with its JWT.
+
+### `POST /api/v1/auth/ws-ticket`
+
+Issues a single-use, short-lived WebSocket connection ticket (TTL: **60 seconds**).
+
+**Auth:** Any authenticated user (`Authorization: Bearer <token>`).
+
+<ResponseField name="ticket" type="string">
+  A URL-safe random string (32 bytes, base64-encoded). Pass this as the `ticket` query parameter when upgrading to WebSocket.
+</ResponseField>
+
+<ResponseField name="expires_in" type="integer">
+  Seconds until the ticket expires. Always `60`.
+</ResponseField>
+
+```bash Example Request
+POST /api/v1/auth/ws-ticket
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+```json Example Response
+{
+  "ticket": "g7hK2mNpQrStUvWxYz0A1bCdEfGhIjKl",
+  "expires_in": 60
+}
+```
+
+<Warning>
+  Tickets are **single-use** and **expire in 60 seconds**. A ticket that has already been used or has expired is silently rejected and the WebSocket connection is closed with code `1008`.
+</Warning>
+
+---
+
+## WebSocket Connection
+
+### `GET /api/v1/ws`
+
+Upgrades the HTTP connection to a WebSocket session. Authentication is performed server-side by consuming the ticket before accepting the socket.
+
+**Query Parameters:**
+
+<ParamField query="ticket" type="string" required>
+  Single-use WS ticket obtained from `POST /api/v1/auth/ws-ticket`.
+</ParamField>
+
+<ParamField query="platform" type="string">
+  Client platform hint. Accepted values: `web` (default), `mobile`. Any other value is normalised to `web`.
+</ParamField>
+
+**Connection lifecycle:**
+
+1. Server validates and consumes the ticket.
+2. On success, the user is marked **online** via `OnlinePresenceService`.
+3. Server sends an immediate `connected` event.
+4. Server sends a `ping` every **30 seconds** — the client should respond with a `pong` message.
+5. On disconnect, the user's presence record is updated to reflect the connection closure.
+
+**Rejection close codes:**
+
+| Code | Reason |
+|---|---|
+| `1008` | Missing ticket, invalid ticket, expired ticket, inactive user |
+| `1011` | Internal server error during connection setup |
+
+---
+
+### JavaScript Connection Example
+
+```javascript
+async function connectToWorkforceWS(jwtToken) {
+  // Step 1: Issue a WS ticket
+  const ticketRes = await fetch("/api/v1/auth/ws-ticket", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${jwtToken}` },
+  });
+  const { ticket } = await ticketRes.json();
+
+  // Step 2: Open the WebSocket with the ticket
+  const ws = new WebSocket(
+    `wss://api.example.com/api/v1/ws?ticket=${ticket}&platform=web`
+  );
+
+  ws.onopen = () => {
+    console.log("[WS] Connection established");
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    console.log("[WS] Event received:", msg.type, msg.payload);
+
+    // Respond to server pings
+    if (msg.type === "ping") {
+      ws.send(JSON.stringify({ type: "pong" }));
+    }
+  };
+
+  ws.onclose = (event) => {
+    console.warn("[WS] Connection closed. Code:", event.code);
+    // Implement exponential back-off reconnect here
+  };
+
+  ws.onerror = (error) => {
+    console.error("[WS] Error:", error);
+  };
+
+  return ws;
+}
+```
+
+---
+
+### Realtime Event Shape
+
+All events delivered over the WebSocket follow the `RealtimeEvent` schema:
+
+<ResponseField name="type" type="string">
+  Event type identifier, e.g. `connected`, `ping`, `new_message`, `notification_created`.
+</ResponseField>
+
+<ResponseField name="event_id" type="string">
+  UUID assigned to this event instance (useful for deduplication).
+</ResponseField>
+
+<ResponseField name="timestamp" type="string">
+  ISO-8601 UTC timestamp of event emission.
+</ResponseField>
+
+<ResponseField name="payload" type="object">
+  Event-specific data dictionary.
+</ResponseField>
+
+<ResponseField name="actor_id" type="string | null">
+  UUID of the user who triggered the event, if applicable.
+</ResponseField>
+
+<ResponseField name="conversation_id" type="string | null">
+  Associated conversation UUID, if applicable.
+</ResponseField>
+
+<ResponseField name="entity_type" type="string | null">
+  Type of related entity, e.g. `"meeting"`, `"call"`, `"task"`.
+</ResponseField>
+
+<ResponseField name="entity_id" type="string | null">
+  UUID of the related entity.
+</ResponseField>
+
+**Known event types:**
+
+| Event Type | Description |
+|---|---|
+| `connected` | Sent immediately after a successful WS handshake |
+| `ping` | Server heartbeat — respond with `{ "type": "pong" }` |
+| `pong` | Server response to a client-initiated ping |
+| `new_message` | A new message was sent to one of the user's conversations |
+| `message_updated` | An existing message was edited |
+| `message_deleted` | A message was soft-deleted |
+| `conversation_updated` | A conversation's metadata (title, settings) changed |
+| `conversation_participants_added` | New members were added to a group/channel |
+| `conversation_read` | A participant marked a conversation as read |
+| `notification_created` | A new in-app notification was created for this user |
+| `notifications_count_updated` | The unread notification count changed |
+| `notification_read` | A specific notification was marked as read |
+| `announcement_created` | A new announcement was published matching the user's audience |
+| `meeting_created` | The user was invited to a new meeting |
+| `meeting_updated` | A meeting the user is part of was updated |
+| `meeting_deleted` | A meeting was cancelled |
+| `meeting_rsvp_updated` | A participant RSVP status changed |
+| `call_incoming` | An inbound voice/video call is ringing |
+| `call_accepted` | The other party accepted the call |
+| `call_declined` | The other party declined the call |
+| `call_missed` | The call timed out before being answered |
+| `call_ended` | The call session was terminated |
+| `call_signal` | WebRTC ICE candidate / offer / answer signal |
+
+---
+
+## Presence
+
+The presence system tracks whether a user is `online`, `away`, or `offline`. Presence state is maintained per-device and expires automatically. The default TTL for an online heartbeat is **90 seconds** (configurable via `ONLINE_PRESENCE_TTL_SECONDS`).
+
+### `POST /api/v1/presence/heartbeat`
+
+Refreshes the caller's online presence state. Clients should call this on a regular interval (recommended: every 30–60 seconds) while the application is in the foreground.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="device_id" type="string" required>
+  Stable device or browser identifier (8–128 characters).
+</ParamField>
+
+<ParamField body="platform" type="string" required>
+  Must be `"web"` or `"mobile"`.
+</ParamField>
+
+<ParamField body="app_state" type="string">
+  Optional foreground/background hint (max 32 chars), e.g. `"active"` or `"background"`.
+</ParamField>
+
+<ResponseField name="user_id" type="string">UUID of the caller.</ResponseField>
+<ResponseField name="online_state" type="string">`online`, `away`, or `offline`.</ResponseField>
+<ResponseField name="is_online" type="boolean" />
+<ResponseField name="last_seen_at" type="string | null">ISO-8601 UTC timestamp.</ResponseField>
+<ResponseField name="platforms" type="array">List of platform strings (`"web"`, `"mobile"`) currently active for this user.</ResponseField>
+
+```json Example Request Body
+{
+  "device_id": "browser-abc-123",
+  "platform": "web",
+  "app_state": "active"
+}
+```
+
+```json Example Response
+{
+  "user_id": "u1a2b3c4-...",
+  "online_state": "online",
+  "is_online": true,
+  "last_seen_at": "2025-01-20T10:45:00Z",
+  "platforms": ["web"]
+}
+```
+
+---
+
+### `POST /api/v1/presence/offline`
+
+Explicitly marks a specific device session as offline. Call this on intentional logout or app backgrounding.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="device_id" type="string" required>
+  The device ID to go offline for.
+</ParamField>
+
+<ParamField body="platform" type="string" required>
+  `"web"` or `"mobile"`.
+</ParamField>
+
+---
+
+### `GET /api/v1/presence/users`
+
+Batch-fetches the online presence state for a set of users by UUID. Useful for rendering online indicators in conversation lists.
+
+**Auth:** Any authenticated user.
+
+<ParamField query="ids" type="string" required>
+  Comma-separated list of user UUIDs, e.g. `ids=uuid1,uuid2,uuid3`.
+</ParamField>
+
+<ResponseField name="users" type="object">
+  Map of `user_id (string)` → `OnlinePresenceRead`.
+  <Expandable title="OnlinePresenceRead fields">
+    <ResponseField name="online_state" type="string">`online`, `away`, or `offline`.</ResponseField>
+    <ResponseField name="is_online" type="boolean" />
+    <ResponseField name="presence_status" type="string">User-set status label, e.g. `"active"`, `"busy"`, `"do_not_disturb"`.</ResponseField>
+    <ResponseField name="last_seen_at" type="string | null">ISO-8601 UTC.</ResponseField>
+    <ResponseField name="platforms" type="array">Active platforms.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Note>
+  Presence state uses a **90-second TTL** by default. A user with no heartbeat in the last 90 seconds transitions to `away`; beyond a further configurable threshold they become `offline`.
+</Note>
+
+---
+
+## Notifications
+
+In-app notifications are lightweight inbox items for each user. They are also emitted as `notification_created` WebSocket events when first written.
+
+### `GET /api/v1/notifications`
+
+Returns up to `limit` notifications for the authenticated user, ordered newest-first.
+
+**Auth:** Any authenticated user.
+
+<ParamField query="limit" type="integer">
+  Maximum notifications to return. Defaults to `50`.
+</ParamField>
+
+<ResponseField name="[]" type="array">
+  Array of `NotificationRead` objects.
+  <Expandable title="NotificationRead fields">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="user_id" type="string" />
+    <ResponseField name="title" type="string" />
+    <ResponseField name="message" type="string" />
+    <ResponseField name="notification_type" type="string">Enum value, e.g. `MEETING_INVITE`, `CALL_INCOMING`, `SYSTEM`.</ResponseField>
+    <ResponseField name="is_read" type="boolean" />
+    <ResponseField name="read_at" type="string | null">ISO-8601 UTC when marked read.</ResponseField>
+    <ResponseField name="related_entity_type" type="string | null" />
+    <ResponseField name="related_entity_id" type="string | null" />
+    <ResponseField name="created_at" type="string">ISO-8601 UTC.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### `PATCH /api/v1/notifications/{notification_id}/read`
+
+Marks a specific notification as read and emits a `notification_read` WebSocket event.
+
+**Auth:** The notification's owner only.
+
+<ParamField path="notification_id" type="string" required>
+  UUID of the notification.
+</ParamField>
+
+---
+
+### `PATCH /api/v1/notifications/read-all`
+
+Marks all unread notifications for the authenticated user as read and emits a `notifications_count_updated` WebSocket event.
+
+**Auth:** Any authenticated user.
+
+---
+
+### `GET /api/v1/notifications/unread-count`
+
+Returns the count of unread notifications.
+
+**Auth:** Any authenticated user.
+
+<ResponseField name="count" type="integer">Number of unread notifications.</ResponseField>
+
+---
+
+## Messaging
+
+Conversations support direct (1-to-1), group, channel, and context-thread types (task, project, meeting, support, EOD, approval). All conversation-scoped actions require the caller to be a participant.
+
+### `GET /api/v1/messages/conversations`
+
+Returns conversations the authenticated user participates in, ordered by most recently updated.
+
+**Auth:** Any authenticated user.
+
+<ParamField query="type" type="string">
+  Filter by conversation type: `direct`, `group`, `channel`, `task_thread`, etc.
+</ParamField>
+
+<ParamField query="search" type="string">
+  Title substring search.
+</ParamField>
+
+<ParamField query="unread_only" type="boolean">
+  When `true`, returns only conversations with unread messages. Defaults to `false`.
+</ParamField>
+
+<ParamField query="limit" type="integer">
+  Maximum results. Defaults to `50`, max `100`.
+</ParamField>
+
+<ParamField query="offset" type="integer">
+  Pagination offset. Defaults to `0`.
+</ParamField>
+
+<ResponseField name="[]" type="array">
+  Array of `ConversationRead` objects including participant list, last message preview, and unread count.
+</ResponseField>
+
+---
+
+### `POST /api/v1/messages/conversations`
+
+Creates a new direct, group, or channel conversation. If a direct conversation between the same two users already exists, it is returned instead of creating a duplicate.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="type" type="string" required>
+  Conversation type: `direct`, `group`, or `channel`.
+</ParamField>
+
+<ParamField body="participant_ids" type="array" required>
+  List of user UUIDs to include. For `direct` conversations, provide exactly one other user ID.
+</ParamField>
+
+<ParamField body="title" type="string">
+  Required for `group` and `channel` types. Auto-generated if omitted.
+</ParamField>
+
+---
+
+### `GET /api/v1/messages/conversations/{conversation_id}`
+
+Fetch details of a single conversation including participants and last message.
+
+**Auth:** Must be a participant.
+
+---
+
+### `GET /api/v1/messages/conversations/{conversation_id}/messages`
+
+Retrieves messages in a conversation in chronological order. Automatically marks fetched messages as **delivered** for the caller.
+
+**Auth:** Must be a participant.
+
+<ParamField query="limit" type="integer">
+  Defaults to `50`, max `100`.
+</ParamField>
+
+<ParamField query="before" type="string">
+  ISO-8601 datetime cursor — returns messages created before this timestamp (for pagination).
+</ParamField>
+
+---
+
+### `POST /api/v1/messages/conversations/{conversation_id}/messages`
+
+Sends a new message to a conversation. Triggers `new_message` and `conversation_updated` WebSocket events for all participants.
+
+**Auth:** Must be a participant. Channel posts require `OWNER` or `ADMIN` participant role.
+
+<ParamField body="body" type="string">
+  Plain-text message body. Required unless `attachment_ids` is provided.
+</ParamField>
+
+<ParamField body="body_html" type="string">
+  Optional sanitised HTML body (rich text). Server-side sanitisation is applied.
+</ParamField>
+
+<ParamField body="mentioned_user_ids" type="array">
+  List of user UUIDs to mention. Only users with access to the conversation can be mentioned.
+</ParamField>
+
+<ParamField body="reply_to_message_id" type="string">
+  UUID of the message being replied to — must belong to the same conversation.
+</ParamField>
+
+<ParamField body="attachment_ids" type="array">
+  UUIDs of pre-uploaded `MessageAttachment` records to attach.
+</ParamField>
+
+```json Example Request Body
+{
+  "body": "Can you review the updated spec?",
+  "mentioned_user_ids": ["u9v8w7x6-..."],
+  "reply_to_message_id": null
+}
+```
+
+<Tip>
+  Upload attachments first via `POST /api/v1/messages/conversations/{conversation_id}/attachments` (multipart, max 5 files, 10 MB each), then reference the returned IDs in the message body.
+</Tip>
+
+---
+
+### `GET /api/v1/messages/unread-count`
+
+Returns the total number of unread conversations, unread messages, and unread mentions for the authenticated user.
+
+<ResponseField name="unread_conversations" type="integer" />
+<ResponseField name="unread_messages" type="integer" />
+<ResponseField name="mentions" type="integer" />
+
+---
+
+## Meetings
+
+Meetings are calendar-style invitations with RSVP state. Creating a meeting automatically sends `meeting_created` WebSocket events and in-app notifications to all invited participants.
+
+### `GET /api/v1/meetings`
+
+Returns meetings visible to the authenticated user — those they organise or are invited to.
+
+**Auth:** Any authenticated user. Admins and HR may pass `scope=all` to view all organisation meetings.
+
+<ParamField query="scope" type="string">
+  Pass `all` to retrieve all meetings (Admin/HR only).
+</ParamField>
+
+<ResponseField name="[]" type="array">
+  Array of `MeetingRead` objects.
+  <Expandable title="MeetingRead fields">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="title" type="string" />
+    <ResponseField name="description" type="string | null" />
+    <ResponseField name="organizer_id" type="string">UUID of the organiser.</ResponseField>
+    <ResponseField name="start_at" type="string">ISO-8601 UTC datetime.</ResponseField>
+    <ResponseField name="end_at" type="string">ISO-8601 UTC datetime.</ResponseField>
+    <ResponseField name="meeting_link" type="string | null">Video call URL.</ResponseField>
+    <ResponseField name="location" type="string | null">Physical location, if applicable.</ResponseField>
+    <ResponseField name="status" type="string">`scheduled` or `cancelled`.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### `POST /api/v1/meetings`
+
+Creates a new meeting and sends invitations to all specified participants. The organiser is automatically added as an `accepted` participant.
+
+**Auth:** Any authenticated user.
+
+<ParamField body="title" type="string" required>
+  Meeting title.
+</ParamField>
+
+<ParamField body="start_at" type="string" required>
+  ISO-8601 UTC start datetime.
+</ParamField>
+
+<ParamField body="end_at" type="string" required>
+  ISO-8601 UTC end datetime.
+</ParamField>
+
+<ParamField body="participants" type="array" required>
+  List of participant user UUIDs to invite. Inactive users are rejected with `400`.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional meeting agenda or description.
+</ParamField>
+
+<ParamField body="meeting_link" type="string">
+  External video call URL.
+</ParamField>
+
+<ParamField body="location" type="string">
+  Physical meeting location.
+</ParamField>
+
+```json Example Request Body
+{
+  "title": "Q1 Sprint Planning",
+  "start_at": "2025-02-03T10:00:00Z",
+  "end_at": "2025-02-03T11:30:00Z",
+  "participants": ["u1a2b3c4-...", "u5d6e7f8-..."],
+  "meeting_link": "https://meet.example.com/sprint-q1",
+  "description": "Planning session for Q1 deliverables"
+}
+```
+
+```json Example Response
+{
+  "id": "m1n2o3p4-...",
+  "title": "Q1 Sprint Planning",
+  "organizer_id": "admin-uuid-...",
+  "start_at": "2025-02-03T10:00:00Z",
+  "end_at": "2025-02-03T11:30:00Z",
+  "meeting_link": "https://meet.example.com/sprint-q1",
+  "location": null,
+  "status": "scheduled"
+}
+```
+
+---
+
+### `POST /api/v1/meetings/{meeting_id}/respond`
+
+RSVP to a meeting invitation.
+
+**Auth:** Must be a participant.
+
+<ParamField body="response_status" type="string" required>
+  One of: `accepted`, `declined`, `tentative`.
+</ParamField>
+
+---
+
+### `GET /api/v1/meetings/upcoming`
+
+Returns future scheduled meetings for the authenticated user, ordered by start time ascending.
+
+**Auth:** Any authenticated user.
+
+---
+
+### `GET /api/v1/meetings/today`
+
+Returns all meetings scheduled for today in the `Asia/Karachi` timezone.
+
+**Auth:** Any authenticated user. Pass `scope=all` for Admin/HR to see all org meetings.
+
+---
+
+## Error Reference
+
+| HTTP Status | Error Code | Reason |
+|---|---|---|
+| `401` | `AUTH_ERROR` | Missing or invalid JWT |
+| `403` | `PERMISSION_ERROR` | Not a participant or insufficient role |
+| `404` | `NOT_FOUND` | Conversation, message, or meeting not found |
+| `1008` (WS) | — | WS ticket missing, invalid, expired, or user inactive |
+| `1011` (WS) | — | Internal server error during WS setup |

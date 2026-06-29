@@ -1,0 +1,233 @@
+---
+title: "Database Migrations, Bootstrap, and Schema Management"
+sidebarTitle: "Migrations"
+description: "How Workforce OS manages its PostgreSQL schema with Alembic, seeds permissions and the bootstrap admin, and handles development vs production database concerns."
+---
+
+Workforce OS uses **Alembic** to version-control the PostgreSQL schema and an automated bootstrapper that seeds the RBAC permission matrix and creates the initial admin account on API startup. This page covers running migrations, creating new migration files, the bootstrap flow, seed data for development, and production-specific database considerations.
+
+<Note>
+  **PostgreSQL is required.** SQLite is explicitly rejected at startup — the `DATABASE_URL` validator raises a `ValueError` if a `sqlite://` URL is detected. All environments, including staging, should use PostgreSQL.
+</Note>
+
+---
+
+## Alembic Migration System Overview
+
+Alembic tracks schema changes in versioned migration scripts stored under `apps/api/alembic/versions/`. Each script contains `upgrade()` and `downgrade()` functions. The Alembic configuration file (`apps/api/alembic.ini`) points at the database via `sqlalchemy.url`, which is overridden at runtime by the `DATABASE_URL` environment variable so the same scripts work across environments.
+
+The `Procfile` in `apps/api` runs migrations automatically before the application server starts on every deploy:
+
+```bash Procfile
+web: python -m alembic upgrade head && gunicorn -w 1 -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:$PORT --timeout 120
+```
+
+This means deployments to Railway are always schema-safe: migrations run, then the app starts.
+
+---
+
+## Running Migrations
+
+### Apply all pending migrations
+
+From the `apps/api` directory with the virtual environment active:
+
+<CodeGroup>
+```bash Local
+cd apps/api
+alembic upgrade head
+```
+
+```bash Railway (one-off command)
+# From the Railway dashboard → API service → Settings → Deploy → Run Command
+python -m alembic upgrade head
+```
+</CodeGroup>
+
+`alembic upgrade head` will:
+1. Connect to the PostgreSQL database using `DATABASE_URL`.
+2. Inspect the `alembic_version` table to determine which migrations have already been applied.
+3. Apply any pending migrations in order, creating all required tables and indexes.
+
+### Check current migration state
+
+```bash
+alembic current
+```
+
+### View migration history
+
+```bash
+alembic history --verbose
+```
+
+### Roll back one migration
+
+```bash
+alembic downgrade -1
+```
+
+<Warning>
+  Downgrading in production is destructive and may result in data loss. Always take a PostgreSQL backup before running a downgrade.
+</Warning>
+
+---
+
+## Creating New Migration Files
+
+### Auto-generate from model changes
+
+After modifying a SQLAlchemy model, generate a migration script automatically:
+
+```bash
+alembic revision --autogenerate -m "add_column_to_table"
+```
+
+Alembic compares your SQLAlchemy models against the current database schema and writes an `upgrade()` / `downgrade()` script to `alembic/versions/`. Review the generated file before committing — auto-generation does not detect all changes (for example, renamed columns or custom constraints may need manual edits).
+
+### Create a blank migration script
+
+For data migrations or DDL that Alembic cannot auto-detect:
+
+```bash
+alembic revision -m "seed_initial_roles"
+```
+
+Edit the generated file to add your `upgrade()` and `downgrade()` logic manually.
+
+---
+
+## Bootstrap: Permission Seeding and Admin Creation
+
+### How it works
+
+When the FastAPI application starts, it runs two bootstrapping phases before accepting requests:
+
+1. **`seed_permissions`** — Inserts or reconciles the base RBAC permission matrix required for role-based access control. This is idempotent and safe to run on every startup.
+2. **Admin user creation** — Checks whether a user with `BOOTSTRAP_ADMIN_EMAIL` already exists. If not, it:
+   - Hashes `BOOTSTRAP_ADMIN_PASSWORD` with bcrypt.
+   - Creates the user with the `admin` role and `active` status.
+   - Sets the display name to `BOOTSTRAP_ADMIN_NAME`.
+   - Logs a confirmation message with the configured email.
+
+   If the admin user already exists, the bootstrapper attempts to reconcile the name and password to match the environment values. The process is fully idempotent.
+
+### Bootstrap credentials
+
+Configure these three variables in your environment before first startup:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `BOOTSTRAP_ADMIN_EMAIL` | `admin@example.com` | The login email for the first admin account. |
+| `BOOTSTRAP_ADMIN_PASSWORD` | `change-this-password` | **Must be changed** from the default in production. The startup validator rejects `change-this-password`, `changeme`, and `password` when `APP_ENV=production`. |
+| `BOOTSTRAP_ADMIN_NAME` | `HR Admin` | Display name for the admin account. |
+
+### First login
+
+<Steps>
+  <Step title="Ensure migrations have run">
+    Confirm `alembic upgrade head` has completed successfully. If using the Railway `Procfile`, this happens automatically on each deploy.
+  </Step>
+
+  <Step title="Start the API">
+    Start the backend service. Watch the startup logs for the bootstrap success message confirming the admin email.
+  </Step>
+
+  <Step title="Log in with bootstrap credentials">
+    Open the frontend, enter `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`, and submit.  
+    A successful login redirects to `/admin/dashboard`.
+  </Step>
+
+  <Step title="Verify the user list">
+    Navigate to **Users & Teams**. You should see at least one user (the bootstrap admin).
+  </Step>
+
+  <Step title="Change the bootstrap password">
+    Immediately change the admin password via the user profile settings page. Do not leave the default in place.
+  </Step>
+</Steps>
+
+<Warning>
+  `BOOTSTRAP_ADMIN_PASSWORD` is a plain-text environment variable intended only for initial provisioning. Change it immediately after the first login. In production, the API startup validator will raise a `RuntimeError` and refuse to start if the password is still set to the known insecure defaults.
+</Warning>
+
+---
+
+## Seed Script for Development
+
+A `seed.py` script is provided for populating a local development database with representative sample data (users, teams, projects, attendance records). This is separate from the production bootstrap and should **never** be run against a production database.
+
+```bash
+cd apps/api
+python seed.py
+```
+
+The seed script assumes `alembic upgrade head` has already been run and that the database is accessible via `DATABASE_URL`.
+
+---
+
+## Troubleshooting
+
+| Error | Cause | Fix |
+|---|---|---|
+| `Relation "users" does not exist` | Migrations have not been run | Run `alembic upgrade head` |
+| `IntegrityError` during bootstrap | Admin user already exists with different credentials | The bootstrapper is idempotent and will attempt to sync; check startup logs for details |
+| `Password is too short` or bootstrap password rejected | Leading/trailing whitespace in `BOOTSTRAP_ADMIN_PASSWORD` | Remove surrounding spaces from the value in `.env` or the Railway dashboard |
+| `DATABASE_URL is missing` | `DATABASE_URL` not set and `PG*` variables incomplete | Set `DATABASE_URL` directly or ensure all of `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` are configured |
+| `SQLite is no longer supported` | `DATABASE_URL` starts with `sqlite://` | Switch to a PostgreSQL connection string |
+
+---
+
+## Production vs Development Databases
+
+| Concern | Development | Production |
+|---|---|---|
+| **Database engine** | PostgreSQL (local or Docker) | PostgreSQL (Railway managed or external) |
+| **SQLite** | ✗ Not supported | ✗ Not supported |
+| **Encoding** | UTF-8 required | UTF-8 required |
+| **Migration trigger** | Manual: `alembic upgrade head` | Automatic via `Procfile` on each deploy |
+| **Seed data** | `seed.py` optional | Never run `seed.py` in production |
+| **Backups** | Not required | Required — enable in Railway dashboard |
+
+### UTF-8 Encoding Requirement
+
+The database must use **UTF-8 encoding** to correctly store emoji and Unicode characters in message bodies, call notes, and other text fields. Railway's managed PostgreSQL uses UTF-8 by default. For self-managed instances:
+
+```sql
+CREATE DATABASE workforce_os
+  WITH ENCODING 'UTF8'
+  TEMPLATE template0
+  LC_COLLATE='C'
+  LC_CTYPE='C';
+```
+
+---
+
+## Backup Guidance
+
+<Warning>
+  Always take a full PostgreSQL backup before running any migration in production, especially `alembic downgrade`.
+</Warning>
+
+**Railway automated backups:**  
+In the Railway dashboard, navigate to your PostgreSQL service → **Settings → Backups** and enable scheduled backups. Railway retains multiple restore points and supports point-in-time recovery on paid plans.
+
+**Manual backup with `pg_dump`:**
+
+```bash
+pg_dump "$DATABASE_URL" \
+  --format=custom \
+  --no-acl \
+  --no-owner \
+  -f workforce_os_$(date +%Y%m%d_%H%M%S).dump
+```
+
+**Restore from a dump:**
+
+```bash
+pg_restore \
+  --dbname "$DATABASE_URL" \
+  --no-acl \
+  --no-owner \
+  workforce_os_<timestamp>.dump
+```

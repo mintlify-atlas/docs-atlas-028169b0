@@ -1,0 +1,303 @@
+---
+title: "Project Governance and Task Lifecycle Management"
+sidebarTitle: "Projects & Tasks"
+description: "Full reference for project approval workflows, task lifecycle states, complexity scoring, completion requests, comments, and role-based access controls."
+---
+
+The Work Execution module follows a **Project-First** hierarchy: every task must belong to an approved project, ensuring all logged effort ties back to a sanctioned business objective. Projects move through an approval gate before any tasks can be assigned under them, and tasks have their own multi-stage lifecycle complete with complexity scoring, blocked-state handling, and a formal completion-request flow for interns and junior employees.
+
+## Project Lifecycle
+
+<Steps>
+  <Step title="Employee submits a project request">
+    Any authenticated user can call `POST /api/v1/projects` with a title, description, priority, and optional due date. The project is created in `pending_approval` status.
+  </Step>
+  <Step title="Manager or Admin reviews the request">
+    `POST /api/v1/projects/{project_id}/approve` accepts a `ProjectDecision` payload. The approver sets `action` to `approved` or `rejected` and may attach a comment.
+  </Step>
+  <Step title="Project becomes task-eligible">
+    Once approved, the project status advances and it appears in the `GET /api/v1/projects/task-eligible` endpoint, making it available for task creation dropdowns. Only `approved` or `active` projects are returned here.
+  </Step>
+  <Step title="Project progresses through active and completed states">
+    Status advances from `approved` → `active` → `completed` as work proceeds. A project can also move to `on_hold` or be soft-deleted via `PATCH /api/v1/projects/{project_id}/archive`.
+  </Step>
+</Steps>
+
+### Full Project Status Lifecycle
+
+| Status | Description |
+|---|---|
+| `draft` | Not yet submitted for approval |
+| `pending_approval` | Awaiting manager or admin decision |
+| `approved` | Cleared for task creation |
+| `active` | Work is actively underway |
+| `on_hold` | Temporarily paused |
+| `completed` | All work finished |
+| `rejected` | Approval denied |
+| `archived` | Soft-deleted; excluded from default listings |
+
+### Project Priority Values
+
+| `priority` | Use case |
+|---|---|
+| `low` | Background or nice-to-have work |
+| `medium` | Standard delivery |
+| `high` | Elevated urgency |
+| `critical` | Immediate attention required |
+
+## Creating a Project
+
+```http
+POST /api/v1/projects
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "title": "Onboarding Portal Redesign",
+  "description": "Revamp the new-hire onboarding UI for Q3.",
+  "priority": "high",
+  "due_date": "2025-09-30"
+}
+```
+
+<Note>
+The response returns `approval_status: pending_approval`. Tasks cannot be created under this project until a manager or admin calls the approve endpoint and sets the project to `approved`.
+</Note>
+
+## Task Lifecycle
+
+Tasks are the atomic units of work. Each task belongs to exactly one project and is assigned to exactly one employee.
+
+### Status Progression
+
+| `status` | Meaning |
+|---|---|
+| `created` | Task exists but work has not started |
+| `approved` | Task explicitly approved (used in certain flows) |
+| `in_progress` | Employee is actively working on it |
+| `blocked` | Work is stalled — **a `blocked_reason` is mandatory** |
+| `completed` | Work is done; pending review |
+| `reviewed` | Manager has reviewed the completed work |
+| `reopened` | Sent back for additional work |
+| `archived` | Soft-deleted from default views |
+
+<Warning>
+Setting a task status to `blocked` without providing `blocked_reason` is a validation error. The frontend must surface a mandatory text input whenever an employee moves a task to the blocked state.
+</Warning>
+
+## Creating a Task
+
+```http
+POST /api/v1/tasks
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "project_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "assigned_to": "f9e8d7c6-b5a4-3210-fedc-ba9876543210",
+  "title": "Design new employee profile card component",
+  "description": "Create a reusable React component with avatar, name, role, and status.",
+  "priority": "medium",
+  "due_date": "2025-08-15"
+}
+```
+
+### Task Create Fields
+
+<ParamField body="project_id" type="UUID" required>
+  Must reference an `approved` or `active` project. The API rejects tasks under `pending_approval` or `rejected` projects.
+</ParamField>
+<ParamField body="assigned_to" type="UUID" required>
+  UUID of the employee who will own and execute the task.
+</ParamField>
+<ParamField body="title" type="string" required>
+  1–255 character task title. This is the label shown everywhere in the UI — never the UUID.
+</ParamField>
+<ParamField body="description" type="string | null">
+  Optional detailed description of the deliverable.
+</ParamField>
+<ParamField body="parent_id" type="UUID | null">
+  Set to create this task as a subtask of an existing task.
+</ParamField>
+<ParamField body="priority" type="string">
+  `low`, `medium` (default), `high`, or `critical`.
+</ParamField>
+<ParamField body="due_date" type="date | null">
+  Target completion date. Tasks past this date and not completed are flagged as overdue.
+</ParamField>
+
+## Complexity Scoring
+
+Managers and admins assign a complexity level and expected duration to help calibrate workload and productivity analytics.
+
+```http
+POST /api/v1/tasks/{task_id}/complexity
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "complexity_level": 5,
+  "expected_duration_minutes": 240
+}
+```
+
+<ParamField body="complexity_level" type="integer (1–10)" required>
+  Relative difficulty score. Typical values follow a Fibonacci-like scale: 1, 2, 3, 5, 8.
+</ParamField>
+<ParamField body="expected_duration_minutes" type="integer (> 0)" required>
+  The manager's estimate of how long the task should take in minutes.
+</ParamField>
+
+<Tip>
+The `actual_duration_minutes` field on `TaskRead` is updated automatically as time logs accumulate. Comparing `expected_duration_minutes` to `actual_duration_minutes` powers the efficiency metrics in the employee growth view.
+</Tip>
+
+## Task Completion Request Flow
+
+Interns and junior employees cannot mark a task as completed directly. They must submit a completion request that a manager then approves or rejects.
+
+<Steps>
+  <Step title="Employee submits completion request">
+    `POST /api/v1/tasks/{task_id}/completion-requests` with an optional summary note. A `TaskCompletionRequest` record is created with status `pending`.
+  </Step>
+  <Step title="Manager reviews pending requests">
+    `GET /api/v1/tasks/completion-requests?status=pending` returns all requests in the manager's team scope.
+  </Step>
+  <Step title="Manager approves or rejects">
+    - **Approve**: `POST /api/v1/tasks/completion-requests/{request_id}/approve` — task status advances to `completed`.
+    - **Reject**: `POST /api/v1/tasks/completion-requests/{request_id}/reject` — task returns to its previous state and the rejection reason is recorded.
+  </Step>
+</Steps>
+
+### Completion Request Statuses
+
+| Status | Meaning |
+|---|---|
+| `pending` | Awaiting manager review |
+| `approved` | Task marked completed |
+| `rejected` | Request denied; task stays in prior state |
+| `cancelled` | Employee withdrew the request |
+| `superseded` | A newer request replaced this one |
+
+## Task Action Flags
+
+Every `TaskRead` response carries computed boolean flags that the frontend uses to gate UI controls:
+
+| Flag | When `true` |
+|---|---|
+| `can_complete` | The current user may mark this task as completed directly |
+| `can_update_status` | The current user may change the task status |
+| `can_start_timer` | The current user may start a timer session on this task |
+
+<Note>
+Time cannot be logged against tasks in `blocked`, `completed`, or `archived` status. The `can_start_timer` flag will be `false` for those states.
+</Note>
+
+## Subtasks
+
+Tasks support one level of parent–child nesting. Subtasks are created by setting `parent_id` on the create request.
+
+```http
+GET /api/v1/tasks/{task_id}/subtasks
+Authorization: Bearer <token>
+```
+
+Returns the list of tasks whose `parent_id` equals `task_id`.
+
+## Task Comments
+
+Team members can leave threaded comments on any task for async collaboration.
+
+<Tabs>
+  <Tab title="Add Comment">
+    ```http
+    POST /api/v1/tasks/{task_id}/comments
+    Authorization: Bearer <token>
+    Content-Type: application/json
+
+    {
+      "content": "Designs approved by the product team. Proceeding to implementation."
+    }
+    ```
+  </Tab>
+  <Tab title="List Comments">
+    ```http
+    GET /api/v1/tasks/{task_id}/comments
+    Authorization: Bearer <token>
+    ```
+  </Tab>
+</Tabs>
+
+**Comment Fields:**
+
+<ParamField body="user_id" type="UUID">
+  Author of the comment (display `user_full_name` in the UI, not the UUID).
+</ParamField>
+<ParamField body="content" type="string">
+  Minimum 1 character. No maximum enforced by the schema.
+</ParamField>
+<ParamField body="created_at" type="datetime (UTC ISO-8601)">
+  Timestamp of when the comment was posted.
+</ParamField>
+
+## Role-Based Access Summary
+
+<CardGroup cols={2}>
+  <Card title="Employees / Interns / Junior Employees" icon="user">
+    - Submit project requests
+    - View assigned tasks
+    - Update status and log time on own tasks
+    - Submit completion requests (interns/juniors)
+    - Add comments on accessible tasks
+  </Card>
+  <Card title="Managers / Team Leads" icon="users">
+    - All employee actions above
+    - Approve or reject project requests
+    - Create and assign tasks to their team
+    - Set complexity and expected duration
+    - Review and approve/reject completion requests
+  </Card>
+  <Card title="Admin / HR Operations" icon="shield">
+    - All manager actions above
+    - Full project and task visibility across the org
+    - Access to `GET /api/v1/tasks/admin/overview` dashboard
+    - Archive projects and tasks
+    - Override task statuses
+  </Card>
+  <Card title="Listing Filters" icon="filter">
+    `GET /api/v1/tasks` accepts `project_id`, `assigned_to`, `status`, and `include_archived` query params. Results are automatically scoped to the caller's access level — employees see only their own tasks; managers see their team's tasks; admins see all.
+  </Card>
+</CardGroup>
+
+## Admin Task Overview Dashboard
+
+The `GET /api/v1/tasks/admin/overview` endpoint (admin role required) provides an organisation-wide snapshot:
+
+```json
+{
+  "summary": {
+    "total_tasks": 142,
+    "active_tasks": 89,
+    "in_progress": 34,
+    "completed": 53,
+    "overdue": 7,
+    "currently_working": 12
+  },
+  "total_count": 142,
+  "tasks": [ ... ],
+  "active_work": [ ... ]
+}
+```
+
+The `active_work` array lists every currently running or paused timer session with the employee name, task title, project title, timer state, and live elapsed seconds.
+
+## UI Identification Rules
+
+<Info>
+UUIDs are **never** displayed in the interface. Follow these label rules everywhere — dropdowns, headings, tables, and notifications:
+
+- **Tasks** → Task Title
+- **Projects** → Project Title
+- **Users** → Full Name
+- **URLs** → Use the UUID in the path (e.g., `/tasks/{uuid}`) but display the title as the page heading
+</Info>

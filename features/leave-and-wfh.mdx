@@ -1,0 +1,233 @@
+---
+title: "Leave, WFH, and Half-Day Request Workflows"
+sidebarTitle: "Leave & WFH"
+description: "Step-by-step guide to submitting, routing, approving, and auditing leave, WFH, and half-day requests with conflict validation and timeline tracking."
+---
+
+The Leave Management module handles every type of planned absence or remote-work request through a single unified workflow. Employees submit requests from the dashboard, the platform routes them to the correct approver, and every action — creation, approval, rejection, escalation — is written to an immutable timeline for full auditability. Calendar-date boundaries are evaluated in the **Asia/Karachi (PKT)** timezone.
+
+## Leave Types
+
+| `leave_type` enum value | Description |
+|---|---|
+| `sick` | Unplanned illness or medical absence |
+| `casual` | Short personal leave |
+| `annual` | Planned annual leave |
+| `half_day` | Partial-day absence — requires `half_day_period` |
+| `wfh` | Work-from-home request (full day, remote) |
+
+<Info>
+WFH is modelled as a leave type rather than a check-in `work_mode` so it follows the same approval chain, overlap checks, and analytics adjustments as any other absence.
+</Info>
+
+## Half-Day Periods
+
+When `is_half_day: true` is submitted, the `half_day_period` field is required:
+
+| `half_day_period` | Shift segment |
+|---|---|
+| `first_half` | First portion of the shift |
+| `second_half` | Second portion of the shift |
+
+Two half-day requests on the same date are allowed **only** when one covers `first_half` and the other covers `second_half`. Any other combination is rejected as a conflict.
+
+## Submission Flow
+
+<Steps>
+  <Step title="Employee submits the request">
+    `POST /api/v1/leaves` with `leave_type`, `start_date`, `end_date`, `reason`, and optionally `is_half_day` + `half_day_period`.
+  </Step>
+  <Step title="Overlap validation">
+    The `LeaveService` checks for conflicting requests in statuses `pending`, `approved`, `escalated`, and `needs_clarification`. Rejected and cancelled requests are ignored. A conflict returns **HTTP 409** with a human-readable description of the blocking request.
+  </Step>
+  <Step title="Atomic record creation">
+    The service creates the `LeaveRequest` row and immediately `flush()`es to obtain its ID, then creates the first `ApprovalTimeline` entry — both within a single database transaction. If either step fails, the entire transaction rolls back, preventing orphaned records.
+  </Step>
+  <Step title="Routing to approver">
+    The request is assigned to the employee's **Reporting Manager** (`manager_id` on the user record). If no manager is configured, it falls back to an **HR Operations** or **Admin** user. The `current_approver_id` field on the request tracks who must act next.
+  </Step>
+  <Step title="Manager notified">
+    An email notification is dispatched to the assigned approver informing them of the pending request.
+  </Step>
+</Steps>
+
+### Example: Submit a Leave Request
+
+```http
+POST /api/v1/leaves
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "leave_type": "sick",
+  "start_date": "2025-08-04",
+  "end_date": "2025-08-04",
+  "reason": "Feeling unwell — doctor's appointment in the morning.",
+  "is_half_day": false
+}
+```
+
+### Example: Submit a Half-Day Request
+
+```http
+POST /api/v1/leaves
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "leave_type": "half_day",
+  "start_date": "2025-08-05",
+  "end_date": "2025-08-05",
+  "reason": "Personal errand in the first half.",
+  "is_half_day": true,
+  "half_day_period": "first_half"
+}
+```
+
+### Request Fields
+
+<ParamField body="start_date" type="date (YYYY-MM-DD)" required>
+  First calendar day of the absence (PKT boundary).
+</ParamField>
+<ParamField body="end_date" type="date (YYYY-MM-DD)" required>
+  Last calendar day of the absence. Must be ≥ `start_date`.
+</ParamField>
+<ParamField body="leave_type" type="string" required>
+  One of `sick`, `casual`, `annual`, `half_day`, `wfh`.
+</ParamField>
+<ParamField body="reason" type="string" required>
+  Human-readable explanation for the request.
+</ParamField>
+<ParamField body="is_half_day" type="boolean">
+  Set `true` for partial-day requests. Defaults to `false`.
+</ParamField>
+<ParamField body="half_day_period" type="string | null">
+  Required when `is_half_day` is `true`. Either `first_half` or `second_half`.
+</ParamField>
+
+## Approval Workflow
+
+Once a request reaches an approver, they can take one of the following `ApprovalAction` values:
+
+| Action | Effect |
+|---|---|
+| `approved` | Request is approved; `status` changes to `approved` |
+| `rejected` | Request is declined; **rejection reason is mandatory** |
+| `escalated` | Forwarded up the chain; **escalation reason is mandatory** |
+| `cancelled` | Withdrawn by the employee (only valid while `pending`) |
+| `clarified` | Employee responds to a manager's clarification request |
+
+<Warning>
+Rejections and escalations require a non-empty `manager_comment`. Submitting without a comment raises a validation error before the request reaches the database.
+</Warning>
+
+### Manager Resolution
+
+```http
+PATCH /api/v1/leaves/{request_id}/resolve
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "action": "approved",
+  "manager_comment": "Approved. Please ensure coverage."
+}
+```
+
+### Authorization Rules for Resolution
+
+- An employee **cannot** approve or reject their own request — the API returns **HTTP 403** and logs a privileged audit event.
+- A Manager or Team Lead can only resolve requests belonging to employees on their direct team (`requester.manager_id == actor.id`). Cross-team resolution is blocked with **HTTP 403**.
+- Only the **current approver** (`current_approver_id`) can resolve a request, unless the actor holds the `admin` or `hr_operations` role.
+
+## Conflict Validation Rules
+
+| Scenario | Result |
+|---|---|
+| Full-day vs full-day on overlapping dates | ❌ Conflict — 409 |
+| Full-day vs half-day on the same date | ❌ Conflict — 409 |
+| Half-day `first_half` vs half-day `second_half` on same date | ✅ Allowed |
+| Half-day same period on same date | ❌ Conflict — 409 |
+| Request vs `rejected` or `cancelled` request | ✅ No conflict |
+
+## Approval Timeline
+
+Every state change is appended to the `ApprovalTimeline` table. The timeline is read-only and append-only — it cannot be edited after the fact.
+
+```http
+GET /api/v1/leaves/{request_id}/timeline
+Authorization: Bearer <token>
+```
+
+**Timeline Entry Fields:**
+
+<ParamField body="actor_name" type="string">
+  Full name of the person who performed the action.
+</ParamField>
+<ParamField body="action" type="string">
+  One of `created`, `approved`, `rejected`, `escalated`, `cancelled`, `clarified`.
+</ParamField>
+<ParamField body="comment" type="string | null">
+  The reason or note attached to the action, if any.
+</ParamField>
+<ParamField body="created_at" type="datetime (UTC ISO-8601)">
+  Exact moment the action was recorded.
+</ParamField>
+
+## Cancellation and Escalation
+
+<Tabs>
+  <Tab title="Cancellation">
+    Employees can cancel their own request **only while it is in `pending` status**.
+
+    ```http
+    POST /api/v1/leaves/{request_id}/cancel
+    Authorization: Bearer <token>
+    ```
+
+    Once a request has been approved or rejected it must be handled through HR directly — it cannot be cancelled via the API.
+  </Tab>
+  <Tab title="Escalation">
+    If the assigned manager does not act within a configured threshold, the request is escalated to an Admin or HR Operations user. Escalations also require a reason and are recorded on the approval timeline. The `escalated_from_id`, `escalated_at`, and `escalation_count` fields on the request track the escalation chain.
+  </Tab>
+  <Tab title="Needs Clarification">
+    A manager can request clarification instead of making a flat decision. The request enters `needs_clarification` status. The employee may update their reason or dates and resubmit — this adds a `clarified` entry to the timeline and returns the request to `pending`.
+  </Tab>
+</Tabs>
+
+## Role-Scoped Visibility
+
+| Role | What they see |
+|---|---|
+| `employee`, `intern`, `junior_employee` | Own requests only — `GET /api/v1/leaves/me` |
+| `manager`, `team_lead` | Pending queue for their direct reports — `GET /api/v1/leaves/pending` |
+| `admin`, `hr_operations` | All requests across the organisation |
+
+## Impact on Analytics
+
+Approved leave records directly influence attendance analytics. When a leave is approved for a given date, the analytics engine treats the employee as having **expected zero work hours** for that day. This prevents unfair penalisation in productivity scores and ensures that "expected hours" calculations used in manager dashboards accurately reflect planned absences rather than no-shows.
+
+<Note>
+**Atomic transaction guarantee:** The platform uses a `flush()` + single `commit()` pattern when creating leave requests. If the timeline entry cannot be written (for any reason), the entire operation rolls back. This eliminates orphaned `LeaveRequest` rows that were previously possible when a network error occurred between the two database writes.
+</Note>
+
+## Leave Request Response Fields
+
+<ParamField body="id" type="UUID">
+  Internal identifier (not displayed in the UI — show `user_full_name` instead).
+</ParamField>
+<ParamField body="user_full_name" type="string | null">
+  Resolved full name of the requesting employee.
+</ParamField>
+<ParamField body="status" type="string">
+  Current status: `pending`, `approved`, `rejected`, `escalated`, `cancelled`, or `needs_clarification`.
+</ParamField>
+<ParamField body="current_approver_id" type="UUID | null">
+  The user currently responsible for acting on the request.
+</ParamField>
+<ParamField body="escalation_count" type="integer">
+  Number of times this request has been escalated up the chain.
+</ParamField>
+<ParamField body="manager_comment" type="string | null">
+  Most recent approver note (required for rejections and escalations).
+</ParamField>

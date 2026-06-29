@@ -1,0 +1,230 @@
+---
+title: "Analytics Dashboards and Workforce Reports"
+sidebarTitle: "Analytics"
+description: "Role-scoped dashboards and workforce reports covering KPIs, attendance trends, task stats, and performance scoring across Admin, Manager, and Employee views."
+---
+
+The Analytics module transforms raw activity data into actionable workforce intelligence. Each role receives a purpose-built dashboard that surfaces the metrics most relevant to their responsibilities, all backed by the same underlying data pipeline of attendance sessions, time logs, daily statistics, and performance metrics. Reports can be pulled on-demand for any date range, and team performance data is exportable to CSV.
+
+<Tabs>
+  <Tab title="Admin">
+    ## Admin Dashboard
+
+    The Admin dashboard gives org-wide visibility across all active employees, projects, and operational exceptions. It is served by two endpoints: `GET /dashboard/admin` returns live headcount KPIs, and `GET /dashboard/admin/analytics` returns the full analytics view powered by `AdminDashboardService`.
+
+    ### Summary KPIs
+
+    <CardGroup cols={3}>
+      <Card title="Workforce Headcount" icon="users">
+        Total users, active users, employees checked in today, WFH vs. office split, and pending approvals count.
+      </Card>
+      <Card title="Open Alerts" icon="bell">
+        Count of unresolved system alerts (`AlertStatus.OPEN`) surfaced directly on the dashboard for immediate action.
+      </Card>
+      <Card title="Active Projects" icon="folder-open">
+        Count of projects with `ACTIVE` or `APPROVED` status, alongside the org-wide overdue task count.
+      </Card>
+    </CardGroup>
+
+    ### Analytics View (`/dashboard/admin/analytics`)
+
+    The full analytics payload (`AdminAnalyticsDashboard`) bundles:
+
+    | Field | Description |
+    |---|---|
+    | `kpis` | `total_employees`, `total_projects`, `pending_approvals`, `attendance_rate`, `checked_in_today`, `late_today`, `wfh_today` |
+    | `attendance_trend` | Daily series of `checked_in`, `late`, and `absent` counts |
+    | `task_statistics` | Breakdown by status: `total`, `completed`, `in_progress`, `on_hold`, `pending`, `rejected` |
+    | `project_statistics` | Breakdown by status: `total`, `approved`, `pending`, `rejected`, `active` |
+    | `department_comparison` | Per-department `employee_count`, `attendance_rate`, `completed_tasks`, `pending_approvals` |
+    | `people_exceptions` | Employees flagged for missing check-ins, overdue tasks, or attendance anomalies |
+    | `recent_activity` | Timestamped activity log entries for audit-trail awareness |
+
+    ### Additional Admin Analytics Tabs
+
+    | Endpoint | Schema | Scope |
+    |---|---|---|
+    | `GET /dashboard/admin/users-analytics` | `UsersAnalyticsDashboard` | Employee roster, role/dept distribution, performance metrics |
+    | `GET /dashboard/admin/communication-analytics` | `CommunicationAnalyticsDashboard` | Unread messages, meeting counts, support tickets |
+    | `GET /dashboard/admin/projects-tasks-analytics` | `ProjectsTasksAnalyticsDashboard` | Project progress, task status distribution |
+
+    <Note>
+      All admin analytics endpoints require the `admin` or `hr_operations` role. The base `/dashboard/admin` requires `admin` only.
+    </Note>
+
+    ### Risk Visibility
+
+    The `people_exceptions` list in the analytics response flags employees with persistent low utilization, missing checkouts, or overdue tasks. Top performers (by productivity score) are surfaced alongside employees needing attention, giving Admins a balanced view without manually filtering.
+  </Tab>
+
+  <Tab title="Manager">
+    ## Manager Dashboard
+
+    The Manager dashboard scopes all data to the requesting manager's direct reports. Managers see only users where `user.manager_id == actor.id`. Admins calling this endpoint see all active users.
+
+    **Endpoint:** `GET /dashboard/manager` → `ManagerDashboard`
+
+    ### KPIs
+
+    | KPI | Source |
+    |---|---|
+    | `team_members_active` | Count of direct reports with an open attendance session today |
+    | `pending_approvals_count` | Pending leave requests (`LeaveRequest`) + pending attendance corrections (`AttendanceCorrection`) where current approver is the manager |
+    | `overdue_tasks_count` | Tasks past `due_date` not in `COMPLETED` or `REVIEWED` status |
+    | `blocked_tasks_count` | Tasks in `BLOCKED` status within the team |
+
+    ### Team Attendance Feed
+
+    The `team_attendance_today` array delivers a real-time per-member attendance snapshot:
+
+    ```json
+    {
+      "user_id": "uuid",
+      "full_name": "Alice Johnson",
+      "checked_in": true,
+      "work_mode": "wfh",
+      "check_in_at": "2025-01-15T09:02:00Z"
+    }
+    ```
+
+    ### Advanced Manager Analytics
+
+    <CardGroup cols={2}>
+      <Card title="Team Analytics" icon="chart-bar">
+        `GET /dashboard/manager/team-analytics` — Attendance by member, workload distribution, task completion rates, logged hours trend, employee performance table.
+      </Card>
+      <Card title="Approvals Analytics" icon="clipboard-check">
+        `GET /dashboard/manager/approvals-analytics` — Pending leaves, pending corrections, EOD reports needing review, weekly approval/rejection counts.
+      </Card>
+      <Card title="EOD Reports" icon="file-lines">
+        `GET /dashboard/manager/eod-reports-analytics` — Team logged hours, blocker counts, productivity scores, missing EOD submissions.
+      </Card>
+      <Card title="Projects & Tasks" icon="list-check">
+        `GET /dashboard/manager/projects-tasks-analytics` — Scoped project progress, task priority distribution, and team task table.
+      </Card>
+    </CardGroup>
+  </Tab>
+
+  <Tab title="Employee">
+    ## Employee Dashboard
+
+    The Employee dashboard (`GET /dashboard/employee` → `EmployeeDashboard`) shows each user their own real-time status for the current business day. No cross-user data is exposed.
+
+    ### KPIs
+
+    | KPI | Field | Notes |
+    |---|---|---|
+    | Check-in status | `attendance_status` | Value from `AttendanceSessionStatus` or `"not_checked_in"` |
+    | Time worked today | `total_time_today` | Minutes between `check_in_at` and `check_out_at` of current session |
+    | Productive time | `productive_time_today` | Sum of all `TimeLog.duration_minutes` for the user (timer-based logs) |
+    | Active timer | `timer` | Task title, `started_at`, and `elapsed_minutes` of the currently running time log |
+    | Tasks due soon | `tasks_due_soon` | Tasks with `due_date` within the next 2 days, not yet completed |
+
+    ### Task Snapshot
+
+    ```python
+    # TaskCounts schema
+    TaskCounts(
+        total=len(all_tasks),
+        in_progress=...,
+        completed=...,
+        blocked=...,
+        overdue=...   # due_date < today and not COMPLETED/REVIEWED
+    )
+    ```
+
+    ### Attendance Summary Object
+
+    The `attendance` object in the response includes `checked_in_today`, `check_in_at`, `check_out_at`, `work_mode` (WFH or OFFICE), `session_status`, and `duration_minutes`. All datetimes are serialized as UTC ISO-8601 strings.
+
+    <Tip>
+      The employee dashboard is available to all authenticated users — no special role is required. It always reflects the current user's own data only.
+    </Tip>
+  </Tab>
+</Tabs>
+
+---
+
+## Data Sources and Aggregation
+
+All dashboard and report data originates from four primary sources:
+
+<CardGroup cols={2}>
+  <Card title="DailyStats" icon="database">
+    A summary table updated asynchronously by the Celery worker. Aggregates total minutes, tasks, and breaks per user per day. Used for trend charts and performance scoring.
+  </Card>
+  <Card title="Attendance Sessions" icon="clock">
+    Raw presence data. Each session records `check_in_at`, `check_out_at`, `work_mode`, and `session_status`. Used for the attendance feed, WFH/office split, and correction workflows.
+  </Card>
+  <Card title="Time Logs" icon="stopwatch">
+    Timer-based productive time. Each log has `started_at`, `duration_minutes`, a `status` (`ACTIVE` or completed), and a `log_type` (`timer` vs. `manual`). Feeds the `productive_time_today` KPI.
+  </Card>
+  <Card title="Performance Metrics" icon="chart-line">
+    A dedicated scoring engine computes `Utilization`, `Consistency`, and `Output` scores from weighted combinations of the sources above. Exposed through `GET /analytics/admin/analytics` endpoints.
+  </Card>
+</CardGroup>
+
+---
+
+## Reports
+
+The Reports API generates date-range aggregations across individuals and teams.
+
+### Report Endpoints
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `GET /reports/employee?start_date=&end_date=` | All users | Personal `WeeklyReportRead` for the authenticated user |
+| `GET /reports/manager?start_date=&end_date=` | Manager / Admin / HR | `WeeklyReportRead` for each direct report |
+| `GET /reports/team-performance` | Manager / Admin / HR | Paginated `TeamPerformanceResponse` with filtering |
+| `GET /reports/team-performance/export` | Manager / Admin / HR | CSV download of team performance data |
+| `GET /reports/hr?start_date=&end_date=` | HR / Admin | Org-wide `WeeklyReportRead` list |
+| `GET /reports/admin?start_date=&end_date=` | Admin only | Org-wide `WeeklyReportRead` list |
+
+### Team Performance Report
+
+The `GET /reports/team-performance` endpoint supports rich filtering:
+
+```http
+GET /reports/team-performance
+  ?period=weekly
+  &date=2025-01-13
+  &department_id=<uuid>
+  &role=employee
+  &search=alice
+  &page=1
+  &page_size=50
+```
+
+The CSV export (`GET /reports/team-performance/export`) produces columns for Employee Name, Email, Role, Department, Designation, Hours, Tasks Worked On, Completed Tasks, Late/Early/WFH/Absence counts, and EOD Status.
+
+### Analytics Endpoints
+
+| Endpoint | Permission | Response |
+|---|---|---|
+| `GET /analytics/best-performers` | `analytics.view_org` | Top performers ranked by score, completed tasks, and attendance consistency |
+| `GET /analytics/workload-balance` | `analytics.view_org` or `analytics.view_team` | Per-user active task count and overload flag |
+| `GET /analytics/burnout-risks` | `analytics.view_org` | Users with high consecutive-high-hour-day streaks and a risk level label |
+| `GET /analytics/productivity-trend/{user_id}` | Authenticated + access check | Daily productivity score series for a specific user |
+
+---
+
+## Leave and Correction Impact on Reporting
+
+Approved leave directly affects how "Expected Hours" is calculated in reports. An employee on approved leave is never flagged as under-utilized for that period. When an attendance correction is approved, the corresponding `DailyStats` row and performance scores are automatically recalculated by the background worker, ensuring historical reports remain accurate.
+
+---
+
+## Known Limitations
+
+<Warning>
+  **Aggregation lag:** `DailyStats` entries are processed asynchronously by the Celery worker. Stats for the current day may be up to **5 minutes behind** real-time activity. Metrics for in-progress sessions are labelled "Estimated" until the session is closed.
+</Warning>
+
+<Warning>
+  **Manual entry bias:** Performance scoring distinguishes between `timer` logs and `manual` logs. Manual time entries are weighted lower to discourage unverified hours. Reports reflect this distinction in the output score.
+</Warning>
+
+<Note>
+  **Incomplete sessions:** If an employee forgets to check out, their session remains open. `total_time_today` is based on the closed session duration; an unclosed session shows `check_out_at: null` and `duration_minutes: null`.
+</Note>

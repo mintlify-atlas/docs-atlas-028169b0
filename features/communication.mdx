@@ -1,0 +1,293 @@
+---
+title: "Messaging, Calls, Meetings, and Notifications"
+sidebarTitle: "Communication"
+description: "Complete reference for direct messages, group channels, WebRTC calls, call recordings, meeting invitations, announcements, and push notification preferences."
+---
+
+The Communication module connects every layer of the workforce — from quick direct messages between two colleagues to org-wide announcements from HR. All real-time events flow over WebSocket connections managed by the platform's `RealtimeService`, while push notifications reach users on mobile (Expo) and desktop browsers (Web Push VAPID) even when they are offline.
+
+---
+
+## Messaging
+
+### Conversations
+
+The messaging system is built around the `Conversation` model. Every exchange — whether a 1-to-1 DM, a group chat, or a contextual thread — lives in a conversation.
+
+**Conversation types:**
+
+| Type | Description |
+|---|---|
+| `DIRECT` | One-to-one private message between two users |
+| `GROUP` | Multi-member chat with configurable posting permissions |
+| `CHANNEL` | Broadcast channel; only owner/admin can post |
+| `TASK_THREAD` | Auto-created discussion thread attached to a task |
+| `PROJECT_THREAD` | Auto-created discussion thread attached to a project |
+| `MEETING_THREAD` | Thread attached to a specific meeting |
+| `APPROVAL_THREAD` | Thread for approval clarifications |
+| `EOD_THREAD` | Manager ↔ employee EOD feedback thread |
+| `SUPPORT_THREAD` | Support ticket thread |
+
+**Key endpoints:**
+
+```http
+GET    /messages/conversations          # List user's conversations
+POST   /messages/conversations          # Create a DM, group, or channel
+GET    /messages/conversations/{id}     # Get conversation detail
+GET    /messages/conversations/{id}/messages   # Paginated message history
+POST   /messages/conversations/{id}/messages   # Send a message
+PATCH  /messages/{message_id}           # Edit own message
+DELETE /messages/{message_id}           # Soft-delete a message
+GET    /messages/unread-count           # Unread conversations, messages, and mentions
+GET    /messages/directory              # Company-wide messaging directory
+```
+
+<Note>
+  Direct messages are deduplicated — if a DM conversation already exists between two users, creating it again returns the existing conversation instead of creating a duplicate.
+</Note>
+
+### Message Formatting
+
+Message bodies support both a plain-text `body` field and a `body_html` field for rich content. The frontend uses **TipTap** to author rich text; the backend sanitizes the HTML through `prepare_message_content()` before persisting it. Both fields are stored, and the frontend chooses which to render.
+
+### Message Receipts and Read Status
+
+Each message tracks delivery and read state per recipient via a `MessageReceipt` row.
+
+- **Delivered:** Automatically marked when the recipient fetches the message list (`GET /messages/conversations/{id}/messages`) or by an explicit call to `POST /messages/conversations/{id}/delivered`.
+- **Seen:** Marked when the user opens the conversation (`POST /messages/conversations/{id}/seen` or `POST /messages/conversations/{id}/read`). This also updates the participant's `last_read_at` timestamp.
+- **Info endpoint:** `GET /messages/{message_id}/info` returns the full per-recipient receipt breakdown, showing who has received and read the message.
+
+Real-time seen/delivered events are pushed over WebSocket to all conversation participants via `RealtimeService.emit_seen_updates()` and `emit_delivered_updates()`.
+
+### Attachments and Voice Notes
+
+Files are uploaded before being linked to a message. Permitted file types include images (`png`, `jpg`, `webp`, `gif`), documents (`pdf`, `docx`, `xlsx`, `csv`, `ppt`), and audio (`mp4`, `webm`, `ogg`, `mp3`). Limits:
+
+| Type | Max Size | Notes |
+|---|---|---|
+| General attachment | 10 MB | Up to 5 files per message |
+| Audio attachment | 2 MB | Audio MIME types only |
+| Voice note | 5 MB | Max 60 seconds; sent as a `VOICE` message type |
+
+```http
+POST /messages/conversations/{id}/attachments     # Upload up to 5 files
+POST /messages/conversations/{id}/voice-notes     # Send a voice note
+GET  /messages/attachments/{attachment_id}/download
+```
+
+### Mentions
+
+Users can be `@mentioned` inside messages by passing `mentioned_user_ids` in the message payload. The backend validates that each mentioned user is a legitimate participant in the conversation's context before creating the `MessageMention` record. Mentions are reflected in the `GET /messages/unread-count` response as a separate `mentions` counter.
+
+### Group and Channel Permissions
+
+Groups and channels support per-conversation posting policies:
+
+| Policy | Field | Values |
+|---|---|---|
+| Who can send messages | `who_can_send_messages` | `all_members` / `admins_only` |
+| Who can add members | `who_can_add_members` | `all_members` / `admins_only` |
+| Who can edit group info | `who_can_edit_group_info` | `all_members` / `admins_only` |
+
+Settings are updated via `PATCH /messages/conversations/{id}/settings`. Participant roles are `OWNER`, `ADMIN`, `MEMBER`, and `VIEWER`. Platform-level managers (`ADMIN`, `HR_OPERATIONS`, `MANAGER` roles) can always add members regardless of conversation-level policy.
+
+---
+
+## Voice and Video Calls
+
+### WebRTC Architecture
+
+Calls use **WebRTC** for direct peer-to-peer media exchange. The platform acts purely as a signaling layer — no media server is required for 1-to-1 calls. This keeps call quality high and infrastructure costs low.
+
+<Note>
+  In the current release, calls are **restricted to direct (1-to-1) conversations**. Group calls require a media server and are not yet supported. Attempting to start a call in a group or channel returns HTTP 400.
+</Note>
+
+### Call Lifecycle
+
+```
+Caller: POST /messages/conversations/{id}/calls/start
+  → CallSession created (status: "ringing")
+  → Recipient receives call_incoming WebSocket event + push notification
+
+Recipient: POST /messages/calls/{call_id}/accept   → status: "active"
+        or POST /messages/calls/{call_id}/decline   → status: "declined"
+
+Either party: POST /messages/calls/{call_id}/end
+  → If ringing:  status → "missed", missed call notification sent
+  → If active:   status → "ended", system message added to conversation
+```
+
+### WebRTC Signaling
+
+SDP offers/answers and ICE candidates are relayed through the backend's signaling store:
+
+```http
+POST /messages/calls/{call_id}/signal     # Write offer / answer / ice_candidate
+GET  /messages/calls/{call_id}/signals    # Pull and consume pending signals
+GET  /messages/calls/incoming             # Check for active ringing call
+GET  /messages/calls/history             # Caller's call history (last 100)
+```
+
+Each signal record is consumed (marked with `consumed_at`) when polled, preventing duplicate delivery.
+
+### Call Recordings
+
+Call participants can upload a browser-captured recording after a call ends. Recordings are stored either locally or in S3/Railway Bucket, depending on the environment's `STORAGE_DRIVER` configuration.
+
+```http
+POST /calls/{call_id}/recordings     # Upload a recording (call participants only)
+```
+
+**Admin recording management** (requires `call_recordings.view` permission):
+
+```http
+GET    /admin/call-recordings               # List recordings with filters
+GET    /admin/call-recordings/stats         # Total/today/voice/video counts, storage used
+GET    /admin/call-recordings/{id}          # Get recording detail
+GET    /admin/call-recordings/{id}/stream   # Stream recording inline
+GET    /admin/call-recordings/{id}/download # Download recording as attachment
+DELETE /admin/call-recordings/{id}          # Soft-delete recording
+```
+
+<Info>
+  Each admin access to a recording (view, stream, download, delete) writes an `AuditLog` entry with `entity_type="call_recording"` for accountability.
+</Info>
+
+The upload endpoint implements a smart replacement policy: a new video recording replaces an existing audio recording for the same call; a larger video replaces a smaller video; an audio recording never replaces an existing video.
+
+---
+
+## Meetings
+
+Meetings are calendar-style invitations with RSVP tracking. Any authenticated user can create a meeting and invite colleagues.
+
+### Endpoints
+
+```http
+GET    /meetings                    # All meetings for the current user
+GET    /meetings/upcoming           # Upcoming scheduled meetings
+GET    /meetings/today              # Today's meetings (PKT timezone)
+GET    /meetings/{id}               # Meeting detail
+POST   /meetings                    # Create a meeting
+POST   /meetings/{id}/cancel        # Cancel a meeting (organizer / Admin only)
+POST   /meetings/{id}/respond       # RSVP: accepted / declined / tentative
+```
+
+### Meeting Model
+
+Each meeting has a `title`, `description`, `start_at`, `end_at`, optional `meeting_link`, and optional `location`. The organizer is automatically added as an `accepted` participant. All other invitees start as `pending`.
+
+When a meeting is created, each invited participant receives an in-app `Notification` of type `MEETING_INVITE`, and a `meeting_created` WebSocket event is emitted to all participant IDs.
+
+<Warning>
+  Only the meeting organizer or an Admin can cancel or update a meeting. Participants can only update their own `response_status` via the respond endpoint.
+</Warning>
+
+Admins and HR Operations users can view all meetings by passing `?scope=all` to `GET /meetings` or `GET /meetings/today`.
+
+---
+
+## Announcements
+
+Announcements are one-to-many broadcasts created by Admins or HR Operations. They appear prominently on the dashboards of targeted users.
+
+### Creating Announcements
+
+```http
+POST /announcements
+```
+
+```json
+{
+  "title": "Public Holiday Notice",
+  "content": "The office will be closed on Monday...",
+  "audience": "all",
+  "start_date": "2025-01-01",
+  "end_date": "2025-01-31",
+  "is_active": true
+}
+```
+
+**Valid audience values:** `all`, `employee`, `admin`, `hr_operations`, `manager`, `team_lead`, `intern`, `junior_employee`
+
+When an announcement is created with `is_active: true`, a `announcement_created` WebSocket event is emitted to all targeted users via `RealtimeService.emit_announcement()`.
+
+### Viewing and Managing Announcements
+
+```http
+GET    /announcements                  # Visible announcements for current user
+GET    /announcements/visible?limit=5  # Dashboard widget (default: 5, no expired)
+GET    /announcements/all              # All announcements (Admin / HR only)
+PATCH  /announcements/{id}             # Update title, content, audience, status
+```
+
+Announcements follow a `draft → active → archived` lifecycle managed through the `is_active` flag and `end_date`.
+
+<Tip>
+  Use `GET /announcements/visible?include_expired=true` in admin management views to see past announcements alongside active ones.
+</Tip>
+
+---
+
+## Notifications
+
+### In-App Notifications
+
+All platform events — messages, meeting invites, missed calls, approvals — generate `Notification` records for the relevant users.
+
+```http
+GET    /notifications                     # Last 50 notifications
+GET    /notifications/unread-count        # {"count": 3}
+PATCH  /notifications/{id}/read           # Mark one notification as read
+PATCH  /notifications/read-all            # Mark all as read
+```
+
+Notification types include: `MEETING_INVITE`, `MEETING_UPDATED`, `MEETING_CANCELLED`, `CALL_INCOMING`, `CALL_MISSED`, and `SYSTEM`.
+
+### Notification Preferences
+
+Each user controls which notification categories they receive:
+
+```http
+GET   /notifications/preferences    # Current preferences
+PATCH /notifications/preferences    # Update preferences
+```
+
+The `NotificationPreferencesUpdate` schema allows toggling individual notification channels per event type. Preferences are created on first access if they do not exist.
+
+### Web Push (Browser)
+
+Desktop browsers subscribe using the **VAPID** Web Push standard:
+
+```http
+GET    /notifications/push-public-key       # Retrieve VAPID public key
+POST   /notifications/push-subscriptions    # Register browser subscription
+DELETE /notifications/push-subscriptions    # Revoke subscription
+POST   /notifications/push/test             # Send a test push to active subscriptions
+```
+
+The test endpoint returns `configured`, `subscriptions`, `attempted`, `sent`, and `failed` counts, making it easy to diagnose push delivery issues.
+
+### Mobile Push (Expo)
+
+The mobile app registers its **Expo push token** on login:
+
+```http
+POST   /notifications/device-tokens            # Register / refresh Expo token
+DELETE /notifications/device-tokens/current    # Revoke token on logout
+DELETE /notifications/device-tokens/{token_id} # Revoke a specific token
+```
+
+Token registration is idempotent — re-registering the same token updates its metadata (platform, app version, device name) without creating duplicates. If the same token is presented by a different user, the old row is revoked and a new one is created.
+
+---
+
+## Real-Time Presence
+
+User online/away/offline status is maintained via **WebSocket heartbeats**. The `ws_manager` tracks active connection counts per user ID. The `UserOnlineEnricher` service attaches live `presence_status` values to participant user objects returned in `ConversationRead` responses, so the messaging UI can display accurate presence indicators without polling.
+
+<Info>
+  Presence state is in-memory and connection-count based. A user with at least one active WebSocket connection is considered `online`. Disconnection triggers an `offline` state after the heartbeat window lapses.
+</Info>

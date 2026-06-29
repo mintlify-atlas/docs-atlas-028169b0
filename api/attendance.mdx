@@ -1,0 +1,264 @@
+---
+title: "REST API Endpoints for Attendance Tracking and Breaks"
+sidebarTitle: "Attendance"
+description: "Start and end daily work sessions, track mid-shift breaks by type, and submit manager-reviewed corrections. All timestamps are UTC ISO-8601."
+---
+
+The Attendance API tracks the complete lifecycle of an employee's working day — from the initial check-in that starts a session, through any breaks taken during the day, to the final check-out. It also provides a structured correction workflow so that late entries or forgotten check-outs can be reviewed and approved by a manager.
+
+<Note>
+  All endpoints in this section are prefixed with `/api/v1/attendance` and require an `Authorization: Bearer <token>` header. Every timestamp in responses is UTC with a `Z` suffix.
+</Note>
+
+---
+
+## Work Mode Values
+
+The `work_mode` field is required when checking in. It controls how the session is classified and whether WFH-specific policies apply.
+
+| Value | Description |
+|-------|-------------|
+| `office` | Employee is working from the office premises. |
+| `wfh` | Employee is working from home. |
+
+---
+
+## POST /attendance/check-in
+
+Start a new work session for the current day. Only one active session is allowed per user at a time; attempting a second check-in before checking out returns a `409 CONFLICT`.
+
+**Auth:** Any authenticated user.
+
+### Request Body
+
+<ParamField body="work_mode" type="string" required>
+  How the employee is working today. Must be `office` or `wfh`.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="id" type="uuid" required>Unique session identifier.</ResponseField>
+<ResponseField name="user_id" type="uuid" required>UUID of the employee who owns this session.</ResponseField>
+<ResponseField name="user_full_name" type="string">Resolved display name of the employee.</ResponseField>
+<ResponseField name="check_in_at" type="datetime" required>UTC timestamp of check-in (ISO-8601 with `Z`).</ResponseField>
+<ResponseField name="check_out_at" type="datetime">UTC timestamp of check-out; `null` while session is active.</ResponseField>
+<ResponseField name="work_mode" type="string" required>`office` or `wfh`.</ResponseField>
+<ResponseField name="session_status" type="string" required>Current session state: `active`, `completed`, `incomplete`, or `corrected`.</ResponseField>
+<ResponseField name="is_late_login" type="boolean" required>`true` if check-in occurred after the shift start grace period.</ResponseField>
+<ResponseField name="is_early_logout" type="boolean" required>`true` if the employee checked out before the expected shift end.</ResponseField>
+<ResponseField name="is_overtime" type="boolean">Flagged `true` when the session extends past the shift end.</ResponseField>
+<ResponseField name="is_corrected" type="boolean" required>`true` if a manager has applied a correction to this session.</ResponseField>
+<ResponseField name="attendance_classification" type="string" required>System-computed classification: `active`, `full_day`, `half_day`, `short_leave`, `insufficient`, `full_leave`, or `leave`.</ResponseField>
+<ResponseField name="worked_minutes" type="integer">Total net worked minutes (excluding break time).</ResponseField>
+<ResponseField name="late_minutes" type="integer">Minutes late relative to shift start.</ResponseField>
+<ResponseField name="early_checkout_minutes" type="integer">Minutes short of full shift.</ResponseField>
+<ResponseField name="total_break_minutes" type="integer">Sum of all break durations in this session.</ResponseField>
+<ResponseField name="dinner_break_minutes" type="integer">Minutes spent on dinner breaks.</ResponseField>
+<ResponseField name="prayer_break_minutes" type="integer">Minutes spent on prayer breaks.</ResponseField>
+<ResponseField name="other_break_minutes" type="integer">Minutes spent on miscellaneous breaks.</ResponseField>
+<ResponseField name="breaks" type="array">List of `AttendanceBreakRead` objects for this session.</ResponseField>
+<ResponseField name="active_break" type="object">The currently open break record, or `null` if no break is active.</ResponseField>
+<ResponseField name="expected_shift_start_at" type="datetime">Scheduled shift start time for today.</ResponseField>
+<ResponseField name="expected_shift_end_at" type="datetime">Scheduled shift end time for today.</ResponseField>
+<ResponseField name="duration_minutes" type="integer">Computed wall-clock session length once checked out.</ResponseField>
+<ResponseField name="total_hours" type="float">Shorthand hours value for UI display.</ResponseField>
+<ResponseField name="created_at" type="datetime" required>Record creation timestamp.</ResponseField>
+<ResponseField name="updated_at" type="datetime" required>Last update timestamp.</ResponseField>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/attendance/check-in" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "work_mode": "office"
+  }'
+```
+
+---
+
+## POST /attendance/check-out
+
+End the currently active session for the authenticated user. The request body is optional; include it only when you need to supply a reason for overtime or an early departure.
+
+**Auth:** Any authenticated user.
+
+### Request Body (optional)
+
+<ParamField body="checkout_after_shift_reason" type="string">
+  Reason for checking out after shift end. Common values: `overtime`, `forgot_checkout`.
+</ParamField>
+
+<ParamField body="checkout_after_shift_note" type="string">
+  Free-text note accompanying an after-shift checkout reason.
+</ParamField>
+
+<ParamField body="early_checkout_reason" type="string">
+  Reason for leaving before the expected shift end.
+</ParamField>
+
+### Response Fields
+
+Returns the completed `AttendanceSessionRead` object with `check_out_at` populated and `session_status` set to `completed`.
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/attendance/check-out" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "early_checkout_reason": "Medical appointment"
+  }'
+```
+
+---
+
+## GET /attendance/me
+
+Retrieve the authenticated employee's personal attendance history, optionally filtered to a date range.
+
+**Auth:** Any authenticated user.
+
+### Query Parameters
+
+<ParamField query="date_from" type="date">
+  Inclusive start date in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField query="date_to" type="date">
+  Inclusive end date in `YYYY-MM-DD` format.
+</ParamField>
+
+### Response Fields
+
+Returns an array of `AttendanceSessionRead` objects sorted by check-in time descending. See [POST /attendance/check-in](#post-attendance-check-in) for the full field list.
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/attendance/me?date_from=2024-06-01&date_to=2024-06-30" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## POST /attendance/breaks/start
+
+Begin a timed break within the current active session. Only one break may be active at a time; the session must not already have an open break.
+
+**Auth:** Any authenticated user with an active session.
+
+### Request Body
+
+<ParamField body="break_type" type="string" required>
+  Category of break. One of: `dinner`, `prayer`, `other`.
+</ParamField>
+
+<ParamField body="note" type="string">
+  Optional free-text note describing the break.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="id" type="uuid" required>Unique break identifier.</ResponseField>
+<ResponseField name="attendance_session_id" type="uuid" required>Parent session UUID.</ResponseField>
+<ResponseField name="break_type" type="string" required>`dinner`, `prayer`, or `other`.</ResponseField>
+<ResponseField name="started_at" type="datetime" required>UTC start timestamp.</ResponseField>
+<ResponseField name="ended_at" type="datetime">UTC end timestamp; `null` while break is active.</ResponseField>
+<ResponseField name="duration_minutes" type="integer">Computed duration once ended; `null` while active.</ResponseField>
+<ResponseField name="note" type="string">Freetext note supplied at start.</ResponseField>
+<ResponseField name="is_paid" type="boolean" required>Whether this break type is a paid break per company policy.</ResponseField>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/attendance/breaks/start" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "break_type": "prayer",
+    "note": "Dhuhr prayer"
+  }'
+```
+
+---
+
+## POST /attendance/breaks/end
+
+End the currently active break, computing and persisting the `duration_minutes`.
+
+**Auth:** Any authenticated user with an active break.
+
+### Request Body
+
+No request body required.
+
+### Response Fields
+
+Returns the completed `AttendanceBreakRead` object with `ended_at` and `duration_minutes` populated.
+
+<Note>
+  The route is exposed at `/breaks/end` in the source (not `/breaks/stop`). The API reference document uses "stop" colloquially — the actual path is `/api/v1/attendance/breaks/end`.
+</Note>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/attendance/breaks/end" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## PATCH /attendance/{session_id}/correction-request
+
+Submit a correction request for a past session where check-in or check-out times need to be amended. The request enters a pending queue for manager review.
+
+**Auth:** Any authenticated user (own sessions only). Managers can initiate corrections for team sessions.
+
+### Path Parameters
+
+<ParamField path="session_id" type="uuid" required>
+  UUID of the attendance session to correct.
+</ParamField>
+
+### Request Body
+
+<ParamField body="reason" type="string" required>
+  Explanation of why the correction is needed.
+</ParamField>
+
+<ParamField body="requested_check_in_at" type="datetime">
+  The desired corrected check-in time (ISO-8601 UTC).
+</ParamField>
+
+<ParamField body="requested_check_out_at" type="datetime">
+  The desired corrected check-out time (ISO-8601 UTC).
+</ParamField>
+
+### Response Fields
+
+Returns the updated `AttendanceSessionRead` with `correction_requested` set to `true` and `correction_reason` populated.
+
+<Warning>
+  Submitting a correction request does not immediately change the session's recorded times. The times are only updated after a manager approves the correction via `PATCH /attendance/{session_id}/resolve-correction`.
+</Warning>
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/attendance/3fa85f64-5717-4562-b3fc-2c963f66afa6/correction-request" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reason": "VPN issue delayed system check-in. Arrived at 09:05.",
+    "requested_check_in_at": "2024-06-15T09:05:00Z",
+    "requested_check_out_at": "2024-06-15T18:00:00Z"
+  }'
+```
+
+---
+
+## Standard Error Response
+
+```json
+{
+  "error": {
+    "code": "CONFLICT",
+    "message": "An active attendance session already exists for today.",
+    "details": []
+  }
+}
+```
+
+Common error codes for this resource: `AUTH_ERROR`, `CONFLICT`, `NOT_FOUND`, `PERMISSION_ERROR`.

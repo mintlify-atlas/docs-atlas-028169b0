@@ -1,47 +1,230 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Workforce Intelligence & Execution OS"
+sidebarTitle: "Quickstart"
+description: "Spin up the full Workforce Intelligence & Execution OS stack locally — FastAPI backend, Celery worker, and Next.js 15 frontend — in under 15 minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+The **Workforce Intelligence & Execution OS** is a monorepo containing a FastAPI backend, a Celery background worker, and a Next.js 15 frontend. This quickstart guide walks you through cloning the repository, configuring your environment, installing dependencies, running all three services, and logging in with the bootstrap admin account.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+<Note>
+  The default local setup uses **SQLite** for the database — no PostgreSQL installation is required to get started. For a full production-equivalent environment, see the [Local Development Guide](/local-development).
+</Note>
 
 ## Prerequisites
 
-Before you begin, you must have:
+Before you begin, ensure the following tools are installed on your machine:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+| Tool | Minimum Version | Notes |
+|---|---|---|
+| **Node.js** | v18.x | v20.x also supported |
+| **Python** | 3.10 | v3.11 also supported |
+| **Redis** | Latest stable | Required for Celery background tasks |
+| **Git** | Any recent | For cloning the repository |
+| **PostgreSQL** | 14+ | Optional locally; SQLite used by default |
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Clone the Repository">
+    Clone the monorepo from GitHub and navigate into the project root:
 
     ```bash
-    npm install your-package
+    git clone https://github.com/Paramount-Intelligence/HR_Monitoring_System.git
+    cd HR_Monitoring_System
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Configure Environment Variables">
+    Copy the root environment example file to `.env` in the project root:
 
     ```bash
-    your-cli init
+    cp .env.example .env
     ```
+
+    Open `.env` and update these two required values before proceeding:
+
+    ```bash .env
+    # Required — set a secure random string
+    APP_SECRET_KEY=change-me-locally
+
+    # Required — points to your local PostgreSQL instance
+    # Leave as-is to use the default local PostgreSQL setup:
+    DATABASE_URL=postgresql://postgres:postgres@localhost:5432/workforce_intelligence_utf8
+
+    # Bootstrap admin credentials — used to create the first admin user
+    BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+    BOOTSTRAP_ADMIN_PASSWORD=change-this-password
+    BOOTSTRAP_ADMIN_NAME="HR Admin"
+    ```
+
+    <Warning>
+      Never commit your `.env` file. It contains `APP_SECRET_KEY` and `BOOTSTRAP_ADMIN_PASSWORD` which must be treated as secrets in any shared or production environment.
+    </Warning>
+
+    <Tip>
+      To test locally with SQLite instead of PostgreSQL, comment out the `DATABASE_URL` line in `.env`. The backend will fall back to a local `workforce_intelligence.db` SQLite file automatically.
+    </Tip>
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Set Up the Backend (API)">
+    Navigate to the API application, create a Python virtual environment, and install all dependencies:
+
+    <CodeGroup>
+
+    ```bash macOS / Linux
+    cd apps/api
+    python -m venv venv
+    source venv/bin/activate
+    pip install -r requirements.txt
+    ```
+
+    ```powershell Windows (PowerShell)
+    cd apps\api
+    python -m venv venv
+    .\venv\Scripts\Activate.ps1
+    pip install -r requirements.txt
+    ```
+
+    </CodeGroup>
+
+    Key packages installed include `fastapi==0.115.0`, `uvicorn[standard]==0.30.6`, `sqlalchemy==2.0.35`, `celery==5.4.0`, `redis==5.1.1`, and `alembic==1.13.3`.
+  </Step>
+
+  <Step title="Initialise the Database">
+    With your virtual environment still active and from the `apps/api` directory, run Alembic migrations to create all tables:
 
     ```bash
-    your-cli start
+    alembic upgrade head
     ```
+
+    Optionally, seed the database with initial reference data:
+
+    ```bash
+    python seed.py
+    ```
+
+    <Info>
+      The system automatically seeds permissions and bootstraps the default admin user on first API startup using the `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` values from your `.env` file. You do not need to run `seed.py` to get a working admin account.
+    </Info>
   </Step>
+
+  <Step title="Set Up the Frontend">
+    Return to the monorepo root and install all frontend dependencies via npm workspaces:
+
+    ```bash
+    # From the repository root
+    cd ../..
+    npm install
+    ```
+
+    npm workspaces automatically installs dependencies for `apps/web`, `apps/mobile`, and all `packages/` in a single command.
+  </Step>
+
+  <Step title="Start the API Server">
+    Open a new terminal. Navigate to `apps/api`, activate your virtual environment, and start the FastAPI server:
+
+    <CodeGroup>
+
+    ```bash macOS / Linux
+    cd apps/api
+    source venv/bin/activate
+    uvicorn app.main:app --host 0.0.0.0 --port 8080
+    ```
+
+    ```powershell Windows (PowerShell)
+    cd apps\api
+    .\venv\Scripts\Activate.ps1
+    python -m uvicorn app.main:app --host 0.0.0.0 --port 8080
+    ```
+
+    </CodeGroup>
+
+    The API will be available at `http://localhost:8080`. The interactive API docs (Swagger UI) are at `http://localhost:8080/docs`.
+  </Step>
+
+  <Step title="Start the Background Worker">
+    Open a third terminal. Navigate to `apps/api`, activate your virtual environment, and start the Celery worker:
+
+    <CodeGroup>
+
+    ```bash macOS / Linux
+    cd apps/api
+    source venv/bin/activate
+    celery -A app.worker worker --loglevel=info
+    ```
+
+    ```powershell Windows (PowerShell)
+    cd apps\api
+    .\venv\Scripts\Activate.ps1
+    python -m celery -A app.worker worker --loglevel=info --pool=solo
+    ```
+
+    </CodeGroup>
+
+    <Warning>
+      Redis must be running before starting the Celery worker. If Redis is not running, the worker will fail to connect. Start Redis with `redis-server` or via Docker: `docker run -p 6379:6379 redis`.
+    </Warning>
+
+    The `--pool=solo` flag is recommended on **Windows** to avoid multiprocessing issues. It is not required on macOS or Linux.
+  </Step>
+
+  <Step title="Start the Frontend">
+    From the monorepo root, start the Next.js development server:
+
+    ```bash
+    # From the repository root
+    npm run dev:web
+    ```
+
+    Alternatively, start it directly from the web app directory:
+
+    ```bash
+    cd apps/web
+    npm run dev
+    ```
+
+    The web application will be available at `http://localhost:3000`.
+  </Step>
+
+  <Step title="Log In with the Bootstrap Admin">
+    Open your browser and navigate to `http://localhost:3000`. Log in using the bootstrap admin credentials you set in your `.env` file:
+
+    ```text
+    Email:    admin@example.com       # BOOTSTRAP_ADMIN_EMAIL
+    Password: change-this-password    # BOOTSTRAP_ADMIN_PASSWORD
+    ```
+
+    <Tip>
+      After your first login, immediately navigate to **Admin → Profile** to update the bootstrap admin's password. The default credentials in `.env.example` are public and should not remain in use.
+    </Tip>
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## What's Running
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+Once all services are started, you will have three processes running:
+
+| Service | URL | Description |
+|---|---|---|
+| **Next.js Frontend** | `http://localhost:3000` | Role-based dashboards and UI |
+| **FastAPI Backend** | `http://localhost:8080` | REST API + WebSocket server |
+| **Swagger UI** | `http://localhost:8080/docs` | Interactive API documentation |
+| **Celery Worker** | — | Background jobs (alerts, reports) |
+| **Redis** | `redis://localhost:6379/0` | Message broker for Celery |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Local Development Guide" icon="laptop-code" href="/local-development">
+    Full environment variable reference, database seeding, linting commands, and common error fixes.
+  </Card>
+  <Card title="System Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand how the backend, frontend, worker, and database fit together.
+  </Card>
+  <Card title="Roles & Permissions" icon="lock" href="/concepts/roles-and-permissions">
+    Invite your first users and assign roles via the Admin panel.
+  </Card>
+  <Card title="API Overview" icon="code" href="/api/overview">
+    Explore all available REST endpoints in the interactive Swagger docs.
+  </Card>
+</CardGroup>

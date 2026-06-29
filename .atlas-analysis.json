@@ -1,0 +1,140 @@
+{
+  "projectType": "saas",
+  "projectName": "Workforce Intelligence & Execution OS",
+  "projectDescription": "A full-stack HR monitoring and workforce management platform providing real-time attendance tracking, project and task governance, leave management, analytics dashboards, and team communication for organizations.",
+  "theme": "luma",
+  "primaryColor": "#7c7c7c",
+  "lightColor": "#080808",
+  "darkColor": "#c1c1c1",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "local-development"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/roles-and-permissions",
+              "concepts/authentication"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "features/attendance-and-shifts",
+              "features/leave-and-wfh",
+              "features/projects-and-tasks",
+              "features/time-tracking",
+              "features/analytics-and-reports",
+              "features/communication",
+              "features/alerts-and-audit-logs"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/railway",
+              "deployment/configuration",
+              "deployment/database-migrations"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/users",
+              "api/attendance",
+              "api/leaves",
+              "api/projects-tasks",
+              "api/time-logs",
+              "api/analytics-reports",
+              "api/organization",
+              "api/governance",
+              "api/realtime"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time attendance tracking with check-in/out, break management, and automatic session classification",
+    "Role-based access control (Admin, HR, Manager, Team Lead, Employee, Intern)",
+    "Project governance with manager approval workflows and task lifecycle management",
+    "Leave, WFH, and half-day request submission and approval flows",
+    "Time tracking via live timers and manual log entries with complexity scoring",
+    "Role-specific analytics dashboards (Admin, Manager, Employee) with KPI cards and trend charts",
+    "Background job processing via Celery + Redis for alerts, email notifications, and metric aggregation",
+    "WebSocket-based real-time presence and notifications",
+    "WebRTC-powered in-app voice/video calls with optional recording",
+    "Secure JWT authentication with refresh token rotation and rate limiting"
+  ],
+  "publicApiSurface": [
+    "POST /api/v1/auth/login",
+    "POST /api/v1/auth/refresh",
+    "POST /api/v1/auth/logout",
+    "POST /api/v1/auth/forgot-password",
+    "POST /api/v1/auth/reset-password",
+    "POST /api/v1/auth/activate",
+    "GET /api/v1/users",
+    "POST /api/v1/users",
+    "GET /api/v1/users/me",
+    "PATCH /api/v1/users/{id}",
+    "POST /api/v1/attendance/check-in",
+    "POST /api/v1/attendance/check-out",
+    "GET /api/v1/attendance/me",
+    "POST /api/v1/attendance/breaks/start",
+    "POST /api/v1/attendance/breaks/stop",
+    "PATCH /api/v1/attendance/corrections",
+    "GET /api/v1/leaves",
+    "POST /api/v1/leaves",
+    "GET /api/v1/leaves/pending",
+    "POST /api/v1/leaves/{id}/resolve",
+    "GET /api/v1/projects",
+    "POST /api/v1/projects",
+    "POST /api/v1/projects/{id}/approve",
+    "GET /api/v1/tasks",
+    "POST /api/v1/tasks",
+    "PATCH /api/v1/tasks/{id}",
+    "POST /api/v1/time-logs/start",
+    "POST /api/v1/time-logs/stop",
+    "POST /api/v1/time-logs/manual",
+    "GET /api/v1/dashboard/employee",
+    "GET /api/v1/dashboard/manager",
+    "GET /api/v1/dashboard/admin",
+    "GET /api/v1/reports/attendance",
+    "GET /api/v1/analytics/admin/analytics",
+    "GET /api/v1/alerts",
+    "GET /api/v1/audit-logs",
+    "GET /api/v1/departments",
+    "GET /api/v1/shifts",
+    "GET /api/v1/holidays",
+    "GET /api/v1/announcements",
+    "GET /api/v1/permissions",
+    "GET /api/v1/messages",
+    "GET /api/v1/notifications",
+    "GET /api/v1/presence",
+    "GET /api/v1/meetings",
+    "GET /health"
+  ]
+}

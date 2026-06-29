@@ -1,0 +1,255 @@
+---
+title: "Task Time Tracking: Timers and Manual Log Entries"
+sidebarTitle: "Time Tracking"
+description: "Complete guide to starting, pausing, resuming, and stopping task timers, plus adding manual time log entries and understanding how logs link to productivity scoring."
+---
+
+The Time Tracking module records how long employees spend on individual tasks, feeding the data into productivity analytics and manager dashboards. Logs can be created in two ways: through a **timer session** that the system measures in real time, or through a **manual entry** that records a start and end time after the fact. Both methods produce a `TimeLog` record linked to a specific task, and the `source_type` field on each log preserves which method was used.
+
+## Two Entry Methods at a Glance
+
+<CardGroup cols={2}>
+  <Card title="Timer-Based" icon="clock">
+    Start a live timer on a task. Pause and resume as needed. Stop the timer to create a finalised `TimeLog`. The system measures elapsed seconds with full accuracy, accounting for pause periods.
+  </Card>
+  <Card title="Manual Entry" icon="pen-to-square">
+    Submit an explicit `started_at` and `ended_at` timestamp pair. Useful as a fallback when a timer was forgotten or work occurred offline. Duration is calculated from the two timestamps.
+  </Card>
+</CardGroup>
+
+The `source_type` enum distinguishes the two:
+
+| `source_type` | Set when |
+|---|---|
+| `timer` | Log was created by stopping a timer session |
+| `manual` | Log was created via the manual entry endpoint |
+
+## Timer Session Lifecycle
+
+<Steps>
+  <Step title="Start the timer">
+    `POST /api/v1/time-logs/start` with the `task_id`. A `TaskTimerSession` is created in status `running`. **Only one active or paused timer is allowed per user across all tasks.** Attempting to start a second timer returns an error.
+  </Step>
+  <Step title="Pause (optional)">
+    `POST /api/v1/time-logs/pause` with the `task_id`. The session transitions to `paused` and accumulated seconds are snapshotted. A `pause_reason` is recorded — possible reasons include `manual_pause`, `attendance_checkout`, `break_started`, and `system`.
+  </Step>
+  <Step title="Resume (optional)">
+    `POST /api/v1/time-logs/resume` with the `task_id`. The session returns to `running` and `last_resumed_at` is updated so live elapsed time can be recalculated by the client.
+  </Step>
+  <Step title="Stop and finalise">
+    `POST /api/v1/time-logs/stop` with the `task_id` and an optional `notes` string. The session is closed (`status = completed`) and a `TimeLog` record is created with `source_type = timer`. The response returns the finalised `TimeLogRead` object.
+  </Step>
+</Steps>
+
+### Timer Pause Reasons
+
+| `pause_reason` | Trigger |
+|---|---|
+| `manual_pause` | Employee explicitly pressed pause |
+| `attendance_checkout` | Session auto-paused when employee checked out of attendance |
+| `break_started` | Session auto-paused when a break was started |
+| `system` | System-initiated pause (e.g., session integrity guard) |
+
+## Timer API Reference
+
+<Tabs>
+  <Tab title="Start">
+    ```http
+    POST /api/v1/time-logs/start
+    Authorization: Bearer <token>
+    Content-Type: application/json
+
+    {
+      "task_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    }
+    ```
+
+    Returns a `TaskTimerRead` object showing the new `running` session.
+  </Tab>
+  <Tab title="Pause">
+    ```http
+    POST /api/v1/time-logs/pause
+    Authorization: Bearer <token>
+    Content-Type: application/json
+
+    {
+      "task_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    }
+    ```
+
+    Returns the updated `TaskTimerRead` with `status: paused` and the current `accumulated_seconds`.
+  </Tab>
+  <Tab title="Resume">
+    ```http
+    POST /api/v1/time-logs/resume
+    Authorization: Bearer <token>
+    Content-Type: application/json
+
+    {
+      "task_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    }
+    ```
+
+    Returns the updated `TaskTimerRead` with `status: running` and a refreshed `last_resumed_at`.
+  </Tab>
+  <Tab title="Stop">
+    ```http
+    POST /api/v1/time-logs/stop
+    Authorization: Bearer <token>
+    Content-Type: application/json
+
+    {
+      "task_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "notes": "Completed the hero section layout and responsive breakpoints."
+    }
+    ```
+
+    Returns a `TimeLogRead` with `source_type: timer` and the final `duration_minutes`.
+  </Tab>
+  <Tab title="Active Timer">
+    ```http
+    GET /api/v1/time-logs/active-timer
+    Authorization: Bearer <token>
+    ```
+
+    Returns the currently `running` or `paused` `TaskTimerRead` for the authenticated user, or `null` if no timer is active.
+  </Tab>
+</Tabs>
+
+### Start/Stop Request Fields
+
+<ParamField body="task_id" type="UUID" required>
+  The task to associate this timer session with. The task must be in an active state — `blocked`, `completed`, and `archived` tasks reject timer starts.
+</ParamField>
+<ParamField body="notes" type="string | null">
+  Optional summary of what was accomplished. Only applicable on the `stop` request. Stored on the resulting `TimeLog`.
+</ParamField>
+
+## Manual Log Entry
+
+Use the manual endpoint when a timer was not running during actual work — for example when work happened offline, in a meeting, or before the timer feature was in use.
+
+```http
+POST /api/v1/time-logs/manual
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "task_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "started_at": "2025-08-04T14:00:00Z",
+  "ended_at": "2025-08-04T16:30:00Z",
+  "notes": "Reviewed design specs and drafted component structure."
+}
+```
+
+### Manual Entry Fields
+
+<ParamField body="task_id" type="UUID" required>
+  Task to credit with this time. Subject to the same active-state requirement as timer starts.
+</ParamField>
+<ParamField body="started_at" type="datetime (UTC ISO-8601)" required>
+  When work began. Must be strictly before `ended_at`.
+</ParamField>
+<ParamField body="ended_at" type="datetime (UTC ISO-8601)" required>
+  When work ended. Must be strictly after `started_at` — validation rejects equal or reversed pairs.
+</ParamField>
+<ParamField body="notes" type="string | null">
+  Optional description of the work performed during this period.
+</ParamField>
+
+<Warning>
+If `ended_at` is less than or equal to `started_at`, the API returns a **422 Unprocessable Entity** error with the message `ended_at must be after started_at`. Always ensure timestamps are submitted in chronological order.
+</Warning>
+
+## TimeLog Response Fields
+
+Every time log endpoint returns a `TimeLogRead` object. Key fields:
+
+<ParamField body="id" type="UUID">
+  Unique log identifier (internal — not displayed as a label in the UI).
+</ParamField>
+<ParamField body="task_id" type="UUID">
+  The task this log is attributed to.
+</ParamField>
+<ParamField body="task_title" type="string | null">
+  Resolved title of the parent task — use this for display instead of `task_id`.
+</ParamField>
+<ParamField body="project_title" type="string | null">
+  Resolved title of the project the task belongs to.
+</ParamField>
+<ParamField body="user_name" type="string | null">
+  Full name of the employee who logged the time.
+</ParamField>
+<ParamField body="started_at" type="datetime (UTC ISO-8601)">
+  Session or manual entry start time, serialised in UTC.
+</ParamField>
+<ParamField body="ended_at" type="datetime | null">
+  Session or manual entry end time. `null` while a timer session is still running.
+</ParamField>
+<ParamField body="duration_minutes" type="integer | null">
+  Total minutes logged. Populated on stop/completion; `null` for in-progress timer logs.
+</ParamField>
+<ParamField body="source_type" type="string">
+  `timer` or `manual` — indicates how this log was created.
+</ParamField>
+<ParamField body="status" type="string">
+  `active` (timer still running), `completed` (finalised), or `invalid` (flagged by the system).
+</ParamField>
+<ParamField body="notes" type="string | null">
+  The work summary provided at stop time or in the manual entry.
+</ParamField>
+
+## Viewing Time Log History
+
+<Tabs>
+  <Tab title="Own Logs">
+    ```http
+    GET /api/v1/time-logs/me
+    Authorization: Bearer <token>
+    ```
+
+    Returns all `TimeLog` records created by the authenticated user, ordered by creation time descending. Includes both timer-sourced and manual entries.
+  </Tab>
+  <Tab title="Team Logs">
+    ```http
+    GET /api/v1/time-logs/team
+    Authorization: Bearer <token>
+    ```
+
+    Requires Manager, Team Lead, Admin, or HR Operations role. Returns time logs for the caller's direct reports (managers/team leads) or all employees (admin/HR).
+  </Tab>
+</Tabs>
+
+## How Logs Link to Tasks
+
+Each `TimeLog` row carries a `task_id` foreign key. This linkage powers several downstream calculations:
+
+- **`actual_duration_minutes` on the task**: The task record accumulates total logged minutes across all associated `TimeLog` rows. Comparing this to `expected_duration_minutes` (set by the manager via the complexity endpoint) yields an efficiency ratio used in the employee growth module.
+- **Admin overview `currently_working` counter**: Counts distinct `TaskTimerSession` rows with `status = running` at query time, giving admins a live headcount of who is actively working.
+- **Project-level rollup**: Project analytics aggregate `duration_minutes` across all tasks belonging to the project for total effort reporting.
+
+## Productive Time Calculation
+
+The platform distinguishes timer-based logs from manual logs in scoring:
+
+<Info>
+**Timer logs** (`source_type = timer`) represent work the system directly measured. The `accumulated_seconds` on the underlying `TaskTimerSession` captures only the intervals between `last_resumed_at` and pause/stop events — pause periods are excluded automatically.
+
+**Manual logs** (`source_type = manual`) represent self-reported work. The duration equals `ended_at − started_at` in full. There is no automatic deduction for any period within that window.
+
+Both log types contribute equally to `actual_duration_minutes` on the task. Downstream analytics may surface `source_type` to managers as a signal when reviewing time breakdowns.
+</Info>
+
+## Role Restrictions
+
+| Action | Employee | Manager / Team Lead | Admin / HR Ops |
+|---|---|---|---|
+| Start / pause / resume / stop own timer | ✅ | ✅ | ✅ |
+| Add manual log for own tasks | ✅ | ✅ | ✅ |
+| View own logs (`/me`) | ✅ | ✅ | ✅ |
+| View team logs (`/team`) | ❌ | ✅ Team scope | ✅ All |
+| Edit or delete a time log | ❌ | ❌ | ✅ Admin only |
+
+<Note>
+Standard employees and managers cannot edit or delete completed time logs. If a log was created in error, an Admin must intervene. This restriction preserves the integrity of historical productivity data.
+</Note>

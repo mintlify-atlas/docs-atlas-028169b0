@@ -1,0 +1,231 @@
+---
+title: "Authentication and Session Management in Workforce OS"
+sidebarTitle: "Authentication"
+description: "JWT access and refresh token flows, account invitation, password reset, security states, frontend auth guards, rate limiting, and common debugging steps."
+---
+
+The Workforce OS uses a secure JWT-based authentication mechanism designed for long-lived sessions while minimising the risk of credential exposure. Every protected API route requires a valid, unexpired access token; the refresh token mechanism lets the frontend silently renew sessions without interrupting the user's workflow.
+
+## Token Design
+
+Two token types are issued on every successful login:
+
+| Token | Lifetime | Purpose |
+|---|---|---|
+| **Access Token** | 15 minutes (`access_token_expire_minutes`) | Sent as `Authorization: Bearer` on every API request. Contains `user_id`, `role`, and `type: access`. |
+| **Refresh Token** | 7 days (`refresh_token_expire_days`) | Stored in the database and linked to the user. Used only to obtain a new access token. |
+
+Both tokens are signed with `HS256` using `APP_SECRET_KEY`. Access tokens embed `sub` (user UUID) and `role` so the backend can resolve permissions without an extra database lookup on every request.
+
+<Info>
+  Token lifetimes and rate-limit windows are all configurable via environment variables. The defaults shown here match the values in `apps/api/app/core/config.py`.
+</Info>
+
+## Login Flow
+
+<Steps>
+  <Step title="Submit Credentials">
+    The user submits their email and password to the login endpoint.
+
+    ```http
+    POST /api/v1/auth/login
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "email": "alice@company.com",
+      "password": "S3cureP@ssword!"
+    }
+    ```
+  </Step>
+  <Step title="Backend Validation">
+    The backend looks up the user by email and uses `verify_password()` (BCrypt via Passlib) to compare the submitted password against the stored `password_hash`. If the credentials are wrong — or if the account is `suspended` or `inactive` — the request is rejected.
+  </Step>
+  <Step title="Token Generation">
+    On success, `create_access_token(user_id, role)` and `create_refresh_token(user_id)` are called:
+
+    ```python
+    # apps/api/app/core/security.py
+    def create_access_token(user_id: str, role: str) -> str:
+        return _create_token(
+            {"sub": user_id, "role": role, "type": "access"},
+            timedelta(minutes=settings.access_token_expire_minutes),
+        )
+
+    def create_refresh_token(user_id: str, *, family_id: str | None = None) -> tuple[str, str]:
+        jti = str(uuid.uuid4())
+        family = family_id or str(uuid.uuid4())
+        token = _create_token(
+            {"sub": user_id, "type": "refresh", "jti": jti, "family_id": family},
+            timedelta(days=settings.refresh_token_expire_days),
+        )
+        return token, jti
+    ```
+
+    The refresh token's `jti` (JWT ID) is persisted to the database so it can be revoked on logout or role change.
+  </Step>
+  <Step title="Response">
+    Both tokens are returned alongside the user's basic profile data.
+
+    ```json
+    {
+      "access_token": "eyJhbGciOiJIUzI1NiIsInR5...",
+      "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5...",
+      "token_type": "bearer",
+      "user": {
+        "id": "a1b2c3d4-...",
+        "full_name": "Alice Smith",
+        "email": "alice@company.com",
+        "role": "employee"
+      }
+    }
+    ```
+  </Step>
+  <Step title="Frontend Storage">
+    The `AuthContext` stores the **access token in memory** (never in `localStorage`) and places the refresh token in a secure, HTTP-only cookie or secure local storage, depending on the environment configuration.
+  </Step>
+</Steps>
+
+## Token Refresh Flow
+
+<Steps>
+  <Step title="Trigger">
+    The access token has expired or is detected as about to expire. The frontend intercepts the `401` response (or proactively refreshes before expiry).
+  </Step>
+  <Step title="Send Refresh Token">
+    The frontend posts the refresh token to the refresh endpoint:
+
+    ```http
+    POST /api/v1/auth/refresh
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5..."
+    }
+    ```
+  </Step>
+  <Step title="Backend Validation">
+    `decode_refresh_token()` verifies the signature and expiry. The backend then checks that the token's `jti` exists in the database and has not been revoked.
+  </Step>
+  <Step title="Issue New Tokens">
+    A new access token is issued. Optionally, a rotated refresh token (new `jti`, same `family_id`) is returned and the old one is invalidated.
+  </Step>
+  <Step title="Failure Handling">
+    If the refresh token is invalid, expired, or has been revoked, the backend returns a `401`. The `AuthContext` clears all local state and redirects the user to `/login`.
+  </Step>
+</Steps>
+
+## Account Invitation & Activation Flow
+
+<Steps>
+  <Step title="Admin or HR Creates the User">
+    An Admin or HR/Ops user creates a new account. The record is saved with `status=invited` and an invitation email containing a unique, time-limited activation token is dispatched via the Celery email worker.
+  </Step>
+  <Step title="User Clicks the Activation Link">
+    The email links to `/activate?token=<activation_token>`. This route is **public** and must not enforce the `AuthContext` auth guard — the user does not yet have a session.
+  </Step>
+  <Step title="User Sets Password">
+    The activation page prompts for a new password. On submission the backend verifies the token, hashes the password with BCrypt, sets `status=active`, and invalidates the activation token.
+  </Step>
+  <Step title="Redirect to Login">
+    The user is redirected to `/login` where they can sign in with their new credentials.
+  </Step>
+</Steps>
+
+<Warning>
+  The activation page **must not redirect** users to `/login` before they have set their password. Applying the standard `AuthContext` auth guard here will cause an infinite redirect loop for newly invited users.
+</Warning>
+
+## Password Reset Flow
+
+<Steps>
+  <Step title="Request Reset">
+    The user enters their email on the Forgot Password page, which calls `POST /api/v1/auth/forgot-password`. The backend generates a `PasswordResetToken` and sends a reset email.
+  </Step>
+  <Step title="Submit New Password">
+    The user follows the reset link (`/reset-password?token=...`) and submits a new password. The backend validates the token, hashes the new password, and persists the update.
+  </Step>
+  <Step title="Token Invalidation">
+    The reset token is marked as used immediately after a successful password change. Attempting to reuse the same token returns an error.
+  </Step>
+</Steps>
+
+## Security States
+
+**Suspended / Inactive Users**
+If a user's `status` is set to `suspended` or `inactive`, all authentication attempts will fail. Any existing access tokens will appear valid until they expire, but the next refresh attempt will be rejected — effectively invalidating the session within 15 minutes.
+
+**Role Changes**
+Roles are baked into the access token payload at login time. If a user's role is changed on the backend, the change will **not** reflect in the frontend until the next successful token refresh or re-login. Plan permission-sensitive role changes accordingly.
+
+**Logout**
+`POST /api/v1/auth/logout` invalidates the refresh token's `jti` in the database and instructs the frontend to clear all local state (cookies, in-memory token).
+
+## Frontend Auth Guard
+
+The `AuthContext` exposes two protection mechanisms:
+
+**`hasPermission(perm: string) → boolean`**
+A helper function that checks whether the currently authenticated user's role includes the given permission key (as defined in `ROLE_PERMISSIONS`). Use this for conditional rendering — showing or hiding buttons, form fields, and menu items.
+
+```tsx
+// Example usage
+if (hasPermission("leave.approve")) {
+  // Render approve button
+}
+```
+
+**`RoleGuard` Component**
+A higher-order component or layout wrapper that evaluates the user's role on mount. It handles two redirect cases:
+
+- **Unauthenticated user** accessing a dashboard route → redirect to `/login`.
+- **Authenticated user** accessing a route restricted to a higher role → redirect to `/unauthorized`.
+
+The sidebar navigation also uses role data from `AuthContext` to dynamically render only the links the user is permitted to access.
+
+## Rate Limiting
+
+The following limits are enforced server-side to prevent brute-force attacks:
+
+| Endpoint | Max Attempts | Window |
+|---|---|---|
+| `POST /api/v1/auth/login` | 5 attempts | 15 minutes (900 s) |
+| `POST /api/v1/auth/forgot-password` | 3 attempts | 15 minutes (900 s) |
+| `POST /api/v1/auth/reset-password` | 5 attempts | 15 minutes (900 s) |
+
+These values map directly to `auth_login_max_attempts`, `auth_forgot_password_max_attempts`, and `auth_reset_password_max_attempts` in `apps/api/app/core/config.py` and can be overridden via environment variables.
+
+## Debugging Auth Issues
+
+<Tabs>
+  <Tab title="401 Unauthorized">
+    A `401` response means the access token is **missing, malformed, or expired**.
+
+    **Checklist:**
+    - Is the `Authorization: Bearer <token>` header present in the request?
+    - Has the 15-minute access token window elapsed? Trigger a token refresh and retry.
+    - Is the JWT signed with the correct `APP_SECRET_KEY`? Mismatched secrets after a key rotation will invalidate all existing tokens.
+  </Tab>
+  <Tab title="403 Forbidden">
+    A `403` response means the user is authenticated but **lacks the required role or permission** for the specific resource.
+
+    **Checklist:**
+    - Does the user's role include the required permission key? Check `ROLE_PERMISSIONS` in `permissions.py`.
+    - Is the resource owned by or within the reporting scope of the requester? Scope checks happen in the service layer, not just the route guard.
+    - Has the user's role been changed recently? They may need to log out and back in to receive an updated token.
+  </Tab>
+  <Tab title="Network Error on Login">
+    A network-level error (no HTTP response) during login usually indicates:
+
+    - The FastAPI backend has crashed — check application logs.
+    - A **CORS misconfiguration** — the browser is blocking the preflight request. Verify that `CORS_ORIGINS` includes the frontend origin and that `FRONTEND_BASE_URL` is set correctly.
+  </Tab>
+  <Tab title="Redirect Loop">
+    An infinite redirect loop on the activation or login page is almost always caused by the **`RoleGuard` being applied to the activation route** before the user is active.
+
+    **Fix:** Ensure `/activate` is placed in the `/(auth)` route group, which must be excluded from `AuthContext` guards. The activation page should be fully public.
+  </Tab>
+</Tabs>

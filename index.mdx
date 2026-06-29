@@ -1,20 +1,66 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Workforce Intelligence & Execution OS"
+sidebarTitle: "Home"
+description: "A full-stack HR monitoring and workforce management platform for real-time attendance, project governance, leave management, and team analytics."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+The Workforce Intelligence & Execution OS is an internal workforce operations platform built by Paramount Intelligence. It captures employee work activity, governs project and task execution, and surfaces operational data as actionable performance insights — giving Admins, Managers, and Employees a single system of record for daily work.
+
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Understand what the platform does and who it's for
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the full stack locally in minutes
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore every REST endpoint with request and response schemas
+  </Card>
+  <Card title="Roles & Permissions" icon="shield-halved" href="/concepts/roles-and-permissions">
+    Learn how RBAC controls access across the platform
+  </Card>
+</CardGroup>
+
+## Core Modules
+
+<CardGroup cols={3}>
+  <Card title="Attendance & Shifts" icon="clock" href="/features/attendance-and-shifts">
+    Check-in/out, break tracking, and session classification
+  </Card>
+  <Card title="Leave & WFH" icon="calendar" href="/features/leave-and-wfh">
+    Submit and approve leave, WFH, and half-day requests
+  </Card>
+  <Card title="Projects & Tasks" icon="list-check" href="/features/projects-and-tasks">
+    Project approval workflows and full task lifecycle management
+  </Card>
+  <Card title="Time Tracking" icon="stopwatch" href="/features/time-tracking">
+    Live timers and manual time log entries per task
+  </Card>
+  <Card title="Analytics & Reports" icon="chart-bar" href="/features/analytics-and-reports">
+    Role-specific dashboards with KPI cards and trend charts
+  </Card>
+  <Card title="Communication" icon="message" href="/features/communication">
+    Messaging, WebRTC calls, meetings, and push notifications
+  </Card>
+</CardGroup>
+
+## Get Running in 4 Steps
+
+<Steps>
+  <Step title="Clone and configure environment">
+    Copy `.env.example` to `.env` at the repo root and set `APP_SECRET_KEY`, `DATABASE_URL`, and `REDIS_URL`.
+  </Step>
+  <Step title="Install backend dependencies and run migrations">
+    Create a Python virtual environment in `apps/api`, install requirements, then run `alembic upgrade head` to prepare the database.
+  </Step>
+  <Step title="Install frontend dependencies">
+    From the repo root, run `npm install` to install all workspace packages including the Next.js web app.
+  </Step>
+  <Step title="Start all services">
+    Launch the FastAPI backend on port 8080, the Celery worker (requires Redis), and the Next.js frontend on port 3000.
+  </Step>
+</Steps>
 
 <Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
+  See the [Local Development guide](/local-development) for complete setup instructions including database seeding and default admin credentials.
 </Tip>
-
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>

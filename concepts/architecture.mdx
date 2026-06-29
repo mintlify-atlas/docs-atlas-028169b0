@@ -1,0 +1,203 @@
+---
+title: "System Architecture: FastAPI, Next.js, and Celery"
+sidebarTitle: "Architecture"
+description: "A complete walkthrough of the Workforce OS monorepo structure, tech stack, request lifecycle, layered backend design, and security architecture."
+---
+
+The Workforce Intelligence & Execution OS is built as a modern, full-stack application using a monorepo-style structure. It prioritises relational consistency, role-based security, and background processing for intelligence tasks — with each application tier separated by responsibility and independently deployable on Railway.
+
+## Monorepo Layout
+
+All application code lives in a single repository partitioned into discrete `apps/` and `packages/` directories:
+
+```text
+/HR Monitoring System
+  /apps
+    /web          # Next.js frontend (App Router, TypeScript, Tailwind)
+    /api          # FastAPI backend (Python, SQLAlchemy, Pydantic)
+    /worker       # Celery worker (async tasks, email, reporting)
+  /packages
+    /ui           # Shared UI components
+    /types        # Shared TypeScript type definitions
+  /infra          # Infrastructure-as-code / deployment scripts
+  /docs           # Project documentation
+```
+
+The `apps/api` backend code is further organised into a layered structure under `apps/api/app`:
+
+```text
+/app
+  /api            # Route handlers & API logic
+    /routes       # Endpoint definitions grouped by module
+    /router.py    # Main router registration
+  /models         # SQLAlchemy database models
+  /schemas        # Pydantic validation schemas
+  /services       # Business logic layer
+  /core           # Configuration, security, and utilities
+  /db             # Session management and migrations
+  /worker         # Celery worker and task definitions
+  /main.py        # Application entry point
+```
+
+The `apps/web` frontend lives under `apps/web/src` with role-scoped route groups:
+
+```text
+/src
+  /app
+    /(auth)           # Login, Forgot Password, Reset
+    /(dashboard)      # Protected dashboard routes
+      /admin          # Admin-only views
+      /hr             # HR/Operations views
+      /manager        # Manager views
+      /team-lead      # Team Lead views
+      /employee       # Employee views
+    /layout.tsx       # Root layout with providers
+  /components         # Reusable UI components
+  /lib                # Utilities, AuthContext, API client
+  /hooks              # Custom React hooks
+```
+
+## Component Diagram
+
+Every user request flows through the frontend tier before reaching the backend. Long-running work is offloaded asynchronously via Redis and Celery so that the API response is never blocked.
+
+```
+Users
+  │
+  ▼
+Next.js Frontend  (App Router · TypeScript · Tailwind · shadcn/ui)
+  │   HTTPS + JWT
+  ▼
+FastAPI Backend   (Python · SQLAlchemy · Pydantic)
+  │                        │
+  ▼                        ▼
+PostgreSQL DB          Redis Broker
+                           │
+                           ▼
+                      Celery Worker ──► PostgreSQL DB
+                           │
+                           ▼
+                       SMTP Email Server
+```
+
+## Technical Stack
+
+<CardGroup cols={2}>
+  <Card title="Frontend" icon="browser">
+    **Next.js** (App Router) · TypeScript · Tailwind CSS · shadcn/ui (Radix UI) · Lucide React · React Hook Form + Zod · Axios
+  </Card>
+  <Card title="Backend" icon="server">
+    **FastAPI** (Python) · SQLAlchemy ORM · Pydantic v2 · Alembic migrations · Passlib BCrypt · python-jose JWT
+  </Card>
+  <Card title="Data & Messaging" icon="database">
+    **PostgreSQL** (production) · SQLite (local dev only) · **Redis** message broker
+  </Card>
+  <Card title="Background Processing" icon="clock">
+    **Celery** worker — email alerts, report generation, periodic metric recalculations
+  </Card>
+  <Card title="Authentication" icon="lock">
+    **JWT** — short-lived access tokens (15 min) + long-lived refresh tokens (7 days) stored in the database
+  </Card>
+  <Card title="Deployment" icon="cloud">
+    **Railway** target platform · Environment-variable-driven configuration via `pydantic-settings`
+  </Card>
+</CardGroup>
+
+<Note>
+  PostgreSQL is mandatory in all non-local environments. The backend will raise a hard error at startup if `DATABASE_URL` resolves to a SQLite connection string.
+</Note>
+
+## Request Lifecycle
+
+Every HTTP request from the browser travels through eight distinct stages before a response is returned:
+
+<Steps>
+  <Step title="Client Request">
+    The Next.js frontend sends an HTTPS request with a JWT `Authorization: Bearer <access_token>` header.
+  </Step>
+  <Step title="API Gateway / CORS">
+    FastAPI's CORS middleware evaluates the `Origin` header. Only origins listed in `CORS_ORIGINS` (plus `FRONTEND_BASE_URL`) are permitted. In development, `localhost:3000`–`3002` are added automatically.
+  </Step>
+  <Step title="Authentication Middleware">
+    The `get_current_user` FastAPI dependency decodes and validates the JWT using `decode_access_token()`. The resolved user object is injected into the request context for downstream handlers.
+  </Step>
+  <Step title="Route Handler">
+    The matching route handler uses **Pydantic schemas** to validate and deserialise the request body, query parameters, and path variables before any business logic executes.
+  </Step>
+  <Step title="Service Layer">
+    Business logic is fully encapsulated in dedicated service classes (e.g., `AttendanceService`, `LeaveService`, `AuthService`). Routes call services — never the database directly.
+  </Step>
+  <Step title="Database Interaction">
+    SQLAlchemy manages all transactions. Sensitive multi-entity operations (e.g., Leave Request + Approval Timeline) use an atomic `flush()` → create related entities → `commit()` pattern so either everything persists or nothing does.
+  </Step>
+  <Step title="Background Tasks">
+    Long-running or non-blocking work — email notifications, metric aggregation, report generation — is enqueued onto Redis and processed by the Celery worker independently of the HTTP response.
+  </Step>
+  <Step title="Response">
+    A standardised JSON response envelope is returned. Errors are mapped to descriptive codes (e.g., `VALIDATION_ERROR`, `AUTH_ERROR`, `CONFLICT`) via centralised exception handlers in `main.py`.
+  </Step>
+</Steps>
+
+## Backend Layered Architecture
+
+<Tabs>
+  <Tab title="API Layer">
+    Located in `/api/routes`, this layer:
+    - Handles HTTP request/response concerns only.
+    - Uses Pydantic schemas for input validation and output serialisation.
+    - Enforces RBAC and permission checks via **FastAPI dependency injection** — never inside service classes.
+    - Delegates all business logic to the Service Layer.
+  </Tab>
+  <Tab title="Service Layer">
+    Located in `/services`, this layer:
+    - Contains the core business logic of the application.
+    - Handles complex validations (e.g., overlapping leave detection), cross-entity interactions, and approval routing.
+    - Is isolated from HTTP-specific concerns, making it reusable in background jobs and unit tests alike.
+  </Tab>
+  <Tab title="Data Layer">
+    Located in `/models` and `/db`, this layer:
+    - **SQLAlchemy** models define the relational schema.
+    - **Alembic** manages schema migrations.
+    - `SessionLocal` provides a per-request database session via `get_db` dependency.
+    - All timestamps are stored in **UTC** and converted to `Asia/Karachi` (PKT) for display.
+  </Tab>
+  <Tab title="Background Jobs">
+    Located in `/worker`, this layer:
+    - **Celery** tasks handle asynchronous processing.
+    - **Redis** serves as the message broker.
+    - Tasks include: transactional email alerts, scheduled report generation, and periodic metric recalculations.
+    - Workers write results back to PostgreSQL directly.
+  </Tab>
+</Tabs>
+
+## Data Consistency Patterns
+
+The system enforces data integrity at multiple levels to prevent corruption:
+
+| Pattern | Description |
+|---|---|
+| **Atomic Transactions** | Multi-entity creations (e.g., Leave Request + Approval Timeline) are wrapped in a single `db.flush()` + `db.commit()` transaction. A failure at any point rolls everything back. |
+| **Constraint Enforcement** | Foreign key and unique constraints are enforced at the **database level**, not only in application code, to prevent orphaned or duplicate records regardless of how data is written. |
+| **UTC Storage** | All timestamps are stored in UTC. Conversion to `Asia/Karachi` (PKT) happens at display time in the frontend via local date-formatting helpers. |
+
+## Security Architecture
+
+<CardGroup cols={3}>
+  <Card title="RBAC" icon="shield-check">
+    Role-Based Access Control is enforced via FastAPI dependencies on every protected route. The service layer additionally applies scope isolation so users can only access data within their hierarchy.
+  </Card>
+  <Card title="CORS Protection" icon="globe">
+    CORS is restricted to explicitly trusted origins. In production, `validate_production_settings()` will refuse to start if `CORS_ORIGINS` is not set or does not include `FRONTEND_BASE_URL`.
+  </Card>
+  <Card title="Secrets Management" icon="key">
+    All secrets (database URLs, SMTP credentials, JWT secret key, API keys) are loaded from environment variables via `pydantic-settings`. Insecure defaults (`change-me-in-env`) trigger a hard startup failure in non-development environments.
+  </Card>
+</CardGroup>
+
+<Warning>
+  Never commit `.env` files to source control. The startup validator (`validate_production_settings`) will crash the application if `APP_SECRET_KEY` is set to any of the known-insecure defaults: `change-me-in-env`, `changeme`, or `secret`.
+</Warning>
+
+<Tip>
+  For local development, the backend accepts `DATABASE_URL` pointing to a Railway-provided PostgreSQL instance. Use `pghost`, `pguser`, `pgpassword`, `pgdatabase`, and `pgport` environment variables as an alternative and the settings layer will assemble the full connection string automatically.
+</Tip>

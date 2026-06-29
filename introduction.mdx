@@ -1,0 +1,122 @@
+---
+title: "Workforce Intelligence & Execution OS: Platform Overview"
+sidebarTitle: "Introduction"
+description: "Explore the Workforce Intelligence & Execution OS — its core modules, supported roles, full tech stack, and Beta/Production Pilot Ready maturity level."
+---
+
+The **Workforce Intelligence & Execution OS** is an internal workforce operations platform built by Paramount Intelligence to capture employee work activity, govern project and task execution, and surface operational data as actionable performance and workload insights. This page covers the platform's product vision, core modules, supported roles, technology stack, and current maturity state.
+
+## Product Vision
+
+This platform is **not** a surveillance tool or a simple timesheet system. It is a **work execution intelligence layer** built on a Task-First philosophy: while raw hours are captured, productivity is measured through complexity-adjusted output and consistency. All operational exceptions — missing checkouts, overdue tasks, unapproved leaves — are surfaced via **automated email alerts**, minimising dashboard fatigue and keeping teams focused on execution rather than monitoring.
+
+<Note>
+  The system operates in the **Asia/Karachi (PKT)** timezone by default for shift windows, roster management, and end-of-day processing. This is configurable via the `BUSINESS_TIMEZONE` environment variable.
+</Note>
+
+## Core Modules
+
+The platform is organised into eight interconnected modules that together cover the full employee work lifecycle:
+
+| Module | Description |
+|---|---|
+| **Attendance & Work Sessions** | Structured check-in/check-out with PKT timezone support and automatic session classification (Full Day, Half Day, etc.) |
+| **Break Tracking** | Paid break management (Dinner, Prayer, and others) integrated directly into attendance sessions |
+| **Project Governance** | Employee-initiated project requests with manager-based approval workflows |
+| **Task Management** | Full task lifecycle — Created → In Progress → Completed — with complexity scoring |
+| **Leave & WFH Management** | Atomic submission and approval flow for leaves, work-from-home, and half-day requests |
+| **Time Tracking** | Real-time timer and manual logging for task-specific duration tracking |
+| **Analytics Dashboards** | Role-specific dashboards (Admin, Manager, Employee) with KPI cards and trend charts |
+| **Alerts & Audit Logs** | Automated email alerts for exceptions and detailed audit trails for governance |
+
+## Supported Roles
+
+The platform uses a six-tier role model, with each role providing a scoped view of the system:
+
+<CardGroup cols={2}>
+  <Card title="Admin" icon="shield-halved">
+    Full system control and organisation-wide visibility across all modules, users, and configuration.
+  </Card>
+  <Card title="HR / Operations" icon="users-gear">
+    User management, report generation, and organisation configuration. No system-level control.
+  </Card>
+  <Card title="Manager" icon="user-tie">
+    Team oversight, project and leave approvals, workload balancing, and team-level analytics.
+  </Card>
+  <Card title="Team Lead" icon="people-group">
+    A subset of Manager permissions scoped to a specific team or workstream.
+  </Card>
+  <Card title="Employee" icon="user">
+    Daily work execution — attendance clock-in/out, task logging, leave requests, and time tracking.
+  </Card>
+  <Card title="Intern / Junior Employee" icon="user-graduate">
+    Specialised roles with scoped activity, reduced permissions, and guided workflows.
+  </Card>
+</CardGroup>
+
+## Technology Stack
+
+The platform is delivered as a **monorepo** with three independently deployable applications:
+
+```text
+├── apps/
+│   ├── web/       # Next.js 15 Frontend
+│   ├── api/       # FastAPI Backend
+│   └── worker/    # Celery Background Workers
+├── packages/
+│   ├── ui/        # Shared React Components
+│   ├── types/     # Shared TypeScript definitions
+│   └── config/    # Shared configuration (Linting, TS, etc.)
+├── docs/          # Technical Specifications & Documentation
+└── infra/         # Docker & Deployment configurations
+```
+
+| Layer | Technology |
+|---|---|
+| **Frontend** | Next.js 15, TypeScript, Tailwind CSS, Shadcn UI, Recharts |
+| **Backend API** | FastAPI 0.115, Pydantic v2, Python 3.10+ |
+| **Database** | SQLite (development) / PostgreSQL (production) |
+| **ORM & Migrations** | SQLAlchemy 2.0, Alembic |
+| **Task Queue** | Celery 5.4 with Redis |
+| **Authentication** | JWT — short-lived access tokens (15 min) + refresh tokens (7 days) |
+| **Background Jobs** | Async Celery workers for alerts and report generation |
+
+<Info>
+  The backend is fully compatible with **PostgreSQL** for production deployments. PostgreSQL databases must use **UTF-8 encoding** to support emoji and unicode in messages. SQLite is used by default for local development with zero setup required.
+</Info>
+
+## Current Maturity Level
+
+The platform is currently in **Beta / Production Pilot Ready** state.
+
+<CardGroup cols={2}>
+  <Card title="Implemented" icon="circle-check" color="#22c55e">
+    Core authentication, attendance tracking, project and task flows, leave management, basic analytics, and admin bootstrapping are complete and stable.
+  </Card>
+  <Card title="Evolving" icon="rotate" color="#f59e0b">
+    Advanced reporting, predictive AI insights, and cross-module anomaly detection are actively under development.
+  </Card>
+  <Card title="Planned" icon="calendar" color="#3b82f6">
+    Full mobile-responsive optimisation and deeper integration with external communication tools beyond current email-only alerts.
+  </Card>
+  <Card title="Online Presence" icon="wifi" color="#8b5cf6">
+    Real-time user online/offline status via configurable heartbeat TTL (`ONLINE_PRESENCE_TTL_SECONDS`, default 90s).
+  </Card>
+</CardGroup>
+
+## Explore the Platform
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get the full stack running locally in minutes — backend, frontend, and worker.
+  </Card>
+  <Card title="System Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand how the FastAPI backend, Next.js frontend, and Celery workers connect.
+  </Card>
+  <Card title="Roles & Permissions" icon="lock" href="/concepts/roles-and-permissions">
+    Deep dive into the six-tier role model and what each role can access.
+  </Card>
+  <Card title="API Overview" icon="code" href="/api/overview">
+    Explore the RESTful API endpoints powering every platform module.
+  </Card>
+</CardGroup>

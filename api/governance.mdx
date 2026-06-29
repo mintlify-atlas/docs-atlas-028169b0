@@ -1,0 +1,217 @@
+---
+title: "REST API for Alerts, Audit Logs, and System Ops"
+sidebarTitle: "Governance"
+description: "Query user-scoped alerts, inspect the immutable Admin-only audit trail, check system health, and trigger restricted database seed and bootstrap operations."
+---
+
+The governance API provides the oversight and operational infrastructure of the Workforce Intelligence OS. Alerts deliver real-time system signals to individual users; the audit log captures every sensitive state change as an immutable record visible only to administrators; the ops endpoints let DevOps teams verify system health and initialise required database state. All paths are prefixed with `/api/v1` and require a valid JWT except the health check.
+
+<Warning>
+  The audit log is **Admin-only** and **immutable**. Records can never be deleted or modified through the API. Attempts by non-admin callers return `403 PERMISSION_ERROR`.
+</Warning>
+
+---
+
+## Alerts
+
+Alerts are system-generated notifications attached to a specific recipient user. Each alert has a status (`OPEN`, `RESOLVED`) and is ordered by creation time with a maximum of 100 returned per request.
+
+### `GET /api/v1/alerts`
+
+Returns up to 100 alerts addressed to the currently authenticated user, ordered newest-first.
+
+**Auth:** Any authenticated user (`get_current_user`).
+
+<ResponseField name="[]" type="array">
+  Array of `AlertRead` objects.
+  <Expandable title="AlertRead fields">
+    <ResponseField name="id" type="string">UUID of the alert.</ResponseField>
+    <ResponseField name="recipient_user_id" type="string">UUID of the user this alert belongs to.</ResponseField>
+    <ResponseField name="status" type="string">Alert lifecycle status: `OPEN` or `RESOLVED`.</ResponseField>
+    <ResponseField name="message" type="string">Human-readable alert message.</ResponseField>
+    <ResponseField name="created_at" type="string">ISO-8601 UTC creation timestamp.</ResponseField>
+    <ResponseField name="resolved_at" type="string | null">ISO-8601 UTC timestamp when the alert was resolved, or `null` if still open.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Example Response
+[
+  {
+    "id": "a1b2c3d4-e5f6-...",
+    "recipient_user_id": "u9v8w7x6-...",
+    "status": "OPEN",
+    "message": "Attendance session not closed — auto check-out applied.",
+    "created_at": "2025-01-20T18:05:00Z",
+    "resolved_at": null
+  }
+]
+```
+
+---
+
+### `PATCH /api/v1/alerts/{alert_id}/resolve`
+
+Marks a specific alert as resolved. Only the alert's intended recipient may resolve it.
+
+**Auth:** Any authenticated user. Must own the alert.
+
+<ParamField path="alert_id" type="string" required>
+  UUID of the alert to resolve.
+</ParamField>
+
+<ResponseField name="id" type="string" />
+<ResponseField name="status" type="string">Will be `RESOLVED` after a successful call.</ResponseField>
+<ResponseField name="resolved_at" type="string">UTC timestamp set at resolution time.</ResponseField>
+
+<Warning>
+  Attempting to resolve an alert owned by a different user returns `403 PERMISSION_ERROR`. A missing alert returns `404 NOT_FOUND`.
+</Warning>
+
+```json Example Response
+{
+  "id": "a1b2c3d4-e5f6-...",
+  "recipient_user_id": "u9v8w7x6-...",
+  "status": "RESOLVED",
+  "message": "Attendance session not closed — auto check-out applied.",
+  "created_at": "2025-01-20T18:05:00Z",
+  "resolved_at": "2025-01-20T18:12:34Z"
+}
+```
+
+---
+
+## Audit Logs
+
+The audit log is the tamper-evident record of sensitive operations performed in the system. Every destructive or privileged action — user role changes, permission overrides, data exports — is written here automatically by the application.
+
+### `GET /api/v1/audit-logs`
+
+Returns up to 200 audit log entries ordered by creation time (newest-first).
+
+**Auth:** `ADMIN` role **required**. All other roles receive `403 PERMISSION_ERROR`.
+
+<ResponseField name="[]" type="array">
+  Array of `AuditLogRead` objects.
+  <Expandable title="AuditLogRead fields">
+    <ResponseField name="id" type="string">UUID of the log entry.</ResponseField>
+    <ResponseField name="actor_id" type="string">UUID of the user who performed the action.</ResponseField>
+    <ResponseField name="action" type="string">Action identifier string, e.g. `"user.role_changed"` or `"permission.override_set"`.</ResponseField>
+    <ResponseField name="entity_type" type="string | null">The type of resource affected, e.g. `"user"`, `"department"`.</ResponseField>
+    <ResponseField name="entity_id" type="string | null">UUID of the affected resource.</ResponseField>
+    <ResponseField name="metadata" type="object | null">JSON object containing before/after state or additional context.</ResponseField>
+    <ResponseField name="ip_address" type="string | null">IP address of the request origin.</ResponseField>
+    <ResponseField name="created_at" type="string">ISO-8601 UTC timestamp of the action.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Note>
+  Audit log entries are written by the server and cannot be created, edited, or deleted via the API. The 200-record cap applies per request — future pagination support may be added in a later API version.
+</Note>
+
+```bash Example Request
+GET /api/v1/audit-logs
+Authorization: Bearer <admin_token>
+```
+
+```json Example Response
+[
+  {
+    "id": "log-1234-...",
+    "actor_id": "admin-uuid-...",
+    "action": "user.role_changed",
+    "entity_type": "user",
+    "entity_id": "emp-uuid-...",
+    "metadata": {
+      "previous_role": "employee",
+      "new_role": "team_lead"
+    },
+    "ip_address": "192.168.1.10",
+    "created_at": "2025-01-19T14:22:05Z"
+  }
+]
+```
+
+---
+
+## System Health
+
+### `GET /health`
+
+A lightweight liveness probe that confirms the API process is running. This endpoint is mounted at the application root — **not** under the `/api/v1` prefix — so it is always reachable even if the versioned router is misconfigured.
+
+**Auth:** None required. Suitable for load-balancer health checks.
+
+<ResponseField name="status" type="string">Always `"ok"` when the process is running.</ResponseField>
+
+```bash Example Request
+GET /health
+```
+
+```json Example Response
+{ "status": "ok" }
+```
+
+<Tip>
+  Use this endpoint in Kubernetes `livenessProbe` and `readinessProbe` configurations. For a deeper database connectivity check, combine it with a monitored background task that writes a heartbeat row.
+</Tip>
+
+---
+
+## Database Ops (Restricted)
+
+These endpoints initialise required database state and are intended for first-run setup or disaster recovery. They do **not** require an authenticated user by default but should be protected by network-level controls (VPN, private subnet) in production.
+
+<Warning>
+  These endpoints are **not** safe to expose publicly. Restrict access to the ops API surface at the infrastructure level before deploying to production. Calling `/ops/db/seed` or `/ops/db/bootstrap-admin` on a live database that already has data is safe (both operations are idempotent) but unnecessary.
+</Warning>
+
+---
+
+### `POST /api/v1/ops/db/seed`
+
+Seeds the `permissions` and `role_permissions` tables with the initial permission matrix defined in `app.core.permission_seeder`. If permissions already exist, the seeder performs an upsert — no data is duplicated.
+
+**Auth:** Restricted — no JWT check enforced by default; secure via network policy.
+
+<ResponseField name="message" type="string">Confirmation message on success.</ResponseField>
+
+```bash Example Request
+POST /api/v1/ops/db/seed
+```
+
+```json Example Response
+{ "message": "Permissions seeded successfully." }
+```
+
+---
+
+### `POST /api/v1/ops/db/bootstrap-admin`
+
+Ensures a system administrator account exists. If no admin user is found in the database, a default admin is created using the credentials defined in `settings.bootstrap_admin_*` environment variables. If an admin already exists, this is a no-op.
+
+**Auth:** Restricted — no JWT check enforced by default; secure via network policy.
+
+<ResponseField name="message" type="string">Indicates whether an admin was created or already existed.</ResponseField>
+
+```bash Example Request
+POST /api/v1/ops/db/bootstrap-admin
+```
+
+```json Example Response — Admin created
+{ "message": "Admin user created: admin@example.com" }
+```
+
+```json Example Response — Admin already exists
+{ "message": "Admin already exists. No action taken." }
+```
+
+---
+
+## Error Reference
+
+| HTTP Status | Error Code | Reason |
+|---|---|---|
+| `401` | `AUTH_ERROR` | Missing or invalid JWT |
+| `403` | `PERMISSION_ERROR` | Caller is not an Admin |
+| `404` | `NOT_FOUND` | Alert not found |
+| `500` | `INTERNAL_ERROR` | Unhandled server error |

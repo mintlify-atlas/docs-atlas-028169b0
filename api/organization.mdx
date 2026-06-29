@@ -1,0 +1,444 @@
+---
+title: "REST API for Departments, Shifts, Holidays, and Announcements"
+sidebarTitle: "Organization"
+description: "Manage the structural building blocks of your workforce — departments, work shifts, public holidays, announcements, and role-based permission records."
+---
+
+The organization API covers all configuration objects that define how your workforce is structured and informed. Departments, shifts, and holidays form the scheduling backbone; announcements carry time-bounded communications to role or department-scoped audiences; permissions expose the full RBAC model. All paths are prefixed with `/api/v1` and require a valid JWT.
+
+<Note>
+  Unless otherwise noted, every endpoint requires `Authorization: Bearer <token>`. Create/update operations are restricted to `ADMIN` or `HR_OPERATIONS` roles.
+</Note>
+
+---
+
+## Departments
+
+### `GET /api/v1/departments`
+
+Returns all departments ordered alphabetically by name. Available to any authenticated user.
+
+<ResponseField name="[]" type="array">
+  Array of `DepartmentRead` objects.
+  <Expandable title="DepartmentRead fields">
+    <ResponseField name="id" type="string">UUID of the department.</ResponseField>
+    <ResponseField name="name" type="string">Department name.</ResponseField>
+    <ResponseField name="description" type="string | null">Optional description.</ResponseField>
+    <ResponseField name="admin_id" type="string | null">UUID of the department head user.</ResponseField>
+    <ResponseField name="admin_name" type="string | null">Full name of the department head, resolved server-side.</ResponseField>
+    <ResponseField name="is_active" type="boolean">Whether the department is currently active.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Example Response
+[
+  {
+    "id": "d1e2f3a4-...",
+    "name": "Engineering",
+    "description": "Product engineering team",
+    "admin_id": "a1b2c3d4-...",
+    "admin_name": "Usman Tariq",
+    "is_active": true
+  }
+]
+```
+
+---
+
+### `POST /api/v1/departments`
+
+Creates a new department. The designated head must be an active user with role `ADMIN`, `HR_OPERATIONS`, `MANAGER`, or `TEAM_LEAD`.
+
+**Auth:** `ADMIN` role required.
+
+<ParamField body="name" type="string" required>
+  Display name for the department.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional free-text description.
+</ParamField>
+
+<ParamField body="head_id" type="string">
+  UUID of the user to assign as department head. Alias for `admin_id`.
+</ParamField>
+
+<ParamField body="is_active" type="boolean">
+  Defaults to `true`.
+</ParamField>
+
+<ResponseField name="id" type="string">UUID of the created department.</ResponseField>
+<ResponseField name="name" type="string" />
+<ResponseField name="admin_name" type="string | null">Resolved head name.</ResponseField>
+
+<Warning>
+  If the specified `head_id` belongs to an inactive user or a role that is ineligible (e.g. `EMPLOYEE`), the server returns `400 Bad Request`.
+</Warning>
+
+```json Example Request Body
+{
+  "name": "Product Design",
+  "description": "UX and visual design team",
+  "head_id": "b2c3d4e5-...",
+  "is_active": true
+}
+```
+
+---
+
+### `GET /api/v1/departments/active`
+
+Returns only departments where `is_active` is `true`. Useful for populating dropdown menus.
+
+**Auth:** Any authenticated user.
+
+---
+
+### `GET /api/v1/departments/{department_id}`
+
+Fetch a single department by UUID.
+
+**Auth:** Any authenticated user.
+
+---
+
+### `PATCH /api/v1/departments/{department_id}`
+
+Update department fields. Partial updates — only send fields you want to change.
+
+**Auth:** `ADMIN` role required.
+
+---
+
+### `DELETE /api/v1/departments/{department_id}`
+
+Soft-deletes a department by setting `is_active = false`. Fails with `409 CONFLICT` if any employees are still assigned to this department.
+
+**Auth:** `ADMIN` role required.
+
+---
+
+## Shifts
+
+Work shifts define the scheduled hours for a group of employees. Shifts carry a name, start/end times, and an optional grace window for late check-ins.
+
+### `GET /api/v1/shifts`
+
+Lists all shifts. Pass `only_active=true` to filter to active shifts only.
+
+**Auth:** Any authenticated user.
+
+<ParamField query="only_active" type="boolean">
+  When `true`, returns only shifts with `is_active = true`. Defaults to `false`.
+</ParamField>
+
+<ResponseField name="[]" type="array">
+  Array of `ShiftRead` objects.
+  <Expandable title="ShiftRead fields">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="name" type="string">Shift label, e.g. `"Morning"` or `"Night"`.</ResponseField>
+    <ResponseField name="start_time" type="string">Local time string `HH:MM:SS`.</ResponseField>
+    <ResponseField name="end_time" type="string">Local time string `HH:MM:SS`.</ResponseField>
+    <ResponseField name="is_active" type="boolean" />
+  </Expandable>
+</ResponseField>
+
+---
+
+### `POST /api/v1/shifts`
+
+Creates a new shift definition.
+
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+<ParamField body="name" type="string" required>
+  Human-readable shift name.
+</ParamField>
+
+<ParamField body="start_time" type="string" required>
+  Shift start time in `HH:MM:SS` format (24-hour clock).
+</ParamField>
+
+<ParamField body="end_time" type="string" required>
+  Shift end time in `HH:MM:SS` format (24-hour clock).
+</ParamField>
+
+<ParamField body="is_active" type="boolean">
+  Defaults to `true`.
+</ParamField>
+
+```json Example Request Body
+{
+  "name": "Morning Shift",
+  "start_time": "09:00:00",
+  "end_time": "17:00:00",
+  "is_active": true
+}
+```
+
+---
+
+### `POST /api/v1/shifts/assign/{user_id}`
+
+Assigns a shift to a specific employee. Pass `shift_id` as a query parameter; omit it to unassign.
+
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+<ParamField query="shift_id" type="string">
+  UUID of the shift to assign. Omit to clear the user's shift assignment.
+</ParamField>
+
+---
+
+## Holidays
+
+Public holidays are calendar entries that inform leave calculations and attendance rules.
+
+### `GET /api/v1/holidays`
+
+Returns all holiday records.
+
+**Auth:** Any authenticated user.
+
+<ResponseField name="[]" type="array">
+  Array of `HolidayRead` objects.
+  <Expandable title="HolidayRead fields">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="name" type="string">Holiday name, e.g. `"Eid ul-Fitr"`.</ResponseField>
+    <ResponseField name="description" type="string | null" />
+    <ResponseField name="holiday_date" type="string">ISO date `YYYY-MM-DD`.</ResponseField>
+    <ResponseField name="is_active" type="boolean" />
+  </Expandable>
+</ResponseField>
+
+---
+
+### `POST /api/v1/holidays`
+
+Creates a new public holiday entry.
+
+**Auth:** `ADMIN` role required.
+
+<ParamField body="name" type="string" required>
+  Holiday name.
+</ParamField>
+
+<ParamField body="holiday_date" type="string" required>
+  Date in ISO format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional description.
+</ParamField>
+
+<ParamField body="is_active" type="boolean">
+  Defaults to `true`.
+</ParamField>
+
+```json Example Request Body
+{
+  "name": "Pakistan Day",
+  "holiday_date": "2025-03-23",
+  "description": "National holiday",
+  "is_active": true
+}
+```
+
+```json Example Response
+{
+  "id": "h1i2j3k4-...",
+  "name": "Pakistan Day",
+  "description": "National holiday",
+  "holiday_date": "2025-03-23",
+  "is_active": true
+}
+```
+
+---
+
+### `GET /api/v1/holidays/upcoming`
+
+Returns the next N active holidays from the given anchor date. Useful for dashboard widgets.
+
+**Auth:** Any authenticated user.
+
+<ParamField query="limit" type="integer">
+  Maximum number of holidays to return. Defaults to `5`.
+</ParamField>
+
+<ParamField query="from_date" type="string">
+  ISO date anchor. Defaults to today.
+</ParamField>
+
+---
+
+## Announcements
+
+Announcements are time-bounded messages broadcast to specific role or department audiences. The server automatically filters which announcements a user can see based on their role.
+
+### `GET /api/v1/announcements`
+
+Returns all active announcements visible to the authenticated user based on their role. Expired or future-dated announcements are excluded.
+
+**Auth:** Any authenticated user.
+
+<ResponseField name="[]" type="array">
+  Array of `AnnouncementRead` objects.
+  <Expandable title="AnnouncementRead fields">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="title" type="string" />
+    <ResponseField name="content" type="string" />
+    <ResponseField name="audience" type="string">One of: `all`, `employee`, `admin`, `hr_operations`, `manager`, `team_lead`, `intern`, `junior_employee`.</ResponseField>
+    <ResponseField name="start_date" type="string | null">ISO date when announcement becomes active.</ResponseField>
+    <ResponseField name="end_date" type="string | null">ISO date when announcement expires.</ResponseField>
+    <ResponseField name="is_active" type="boolean" />
+    <ResponseField name="created_by" type="string">UUID of the creating user.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### `POST /api/v1/announcements`
+
+Creates a new announcement and broadcasts a `announcement_created` realtime event to all connected WebSocket clients matching the audience.
+
+**Auth:** `ADMIN` or `HR_OPERATIONS` role required.
+
+<ParamField body="title" type="string" required>
+  Announcement headline.
+</ParamField>
+
+<ParamField body="content" type="string" required>
+  Full announcement body.
+</ParamField>
+
+<ParamField body="audience" type="string" required>
+  Target audience. Must be one of: `all`, `employee`, `admin`, `hr_operations`, `manager`, `team_lead`, `intern`, `junior_employee`.
+</ParamField>
+
+<ParamField body="start_date" type="string">
+  ISO date for when the announcement starts displaying. Optional.
+</ParamField>
+
+<ParamField body="end_date" type="string">
+  ISO date for when the announcement stops displaying. Optional.
+</ParamField>
+
+<ParamField body="is_active" type="boolean">
+  Defaults to `true`. Set to `false` to create a draft.
+</ParamField>
+
+<Tip>
+  When `is_active` is `true`, a `announcement_created` WebSocket event is automatically pushed to all connected clients whose role matches the `audience` value.
+</Tip>
+
+```json Example Request Body
+{
+  "title": "Office Closed — Public Holiday",
+  "content": "The office will be closed on 23rd March 2025 for Pakistan Day.",
+  "audience": "all",
+  "start_date": "2025-03-22",
+  "end_date": "2025-03-24",
+  "is_active": true
+}
+```
+
+---
+
+### `GET /api/v1/announcements/visible`
+
+Returns a limited list of active, non-expired announcements for dashboard panels.
+
+**Auth:** Any authenticated user.
+
+<ParamField query="limit" type="integer">
+  Number of announcements to return. Defaults to `5`.
+</ParamField>
+
+<ParamField query="include_expired" type="boolean">
+  When `true`, also returns expired announcements. Defaults to `false`.
+</ParamField>
+
+---
+
+## Permissions
+
+The permissions system maps role keys to capability strings. These records are seeded at startup and managed exclusively by system administrators.
+
+### `GET /api/v1/permissions`
+
+Lists all registered permission keys and their descriptions.
+
+**Auth:** Requires the `permissions.manage` permission (Admin only in practice).
+
+<ResponseField name="[]" type="array">
+  Array of permission descriptor objects.
+  <Expandable title="Permission fields">
+    <ResponseField name="key" type="string">Dot-notation permission key, e.g. `analytics.view_org`.</ResponseField>
+    <ResponseField name="description" type="string | null">Human-readable description of the permission.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Example Response
+[
+  { "key": "analytics.view_org", "description": "View org-wide analytics" },
+  { "key": "analytics.view_team", "description": "View team analytics" },
+  { "key": "permissions.manage", "description": "Manage role and user permissions" }
+]
+```
+
+---
+
+### `GET /api/v1/permissions/role/{role}`
+
+Returns the list of permission keys assigned to a specific role.
+
+**Auth:** `permissions.manage` permission required.
+
+<ParamField path="role" type="string" required>
+  Role identifier, e.g. `admin`, `manager`, `employee`.
+</ParamField>
+
+---
+
+### `POST /api/v1/permissions/user-override`
+
+Grants or revokes a specific permission for an individual user, overriding their role defaults.
+
+**Auth:** `permissions.manage` permission required.
+
+<ParamField body="user_id" type="string" required>
+  UUID of the target user.
+</ParamField>
+
+<ParamField body="permission_key" type="string" required>
+  The permission key to override, e.g. `analytics.view_org`.
+</ParamField>
+
+<ParamField body="granted" type="boolean">
+  `true` to grant, `false` to revoke. Defaults to `true`.
+</ParamField>
+
+---
+
+### `GET /api/v1/permissions/user/{user_id}`
+
+Returns the full resolved permission set for a user, merging their role permissions with any individual overrides.
+
+**Auth:** `permissions.manage` permission required.
+
+<ResponseField name="user_id" type="string" />
+<ResponseField name="role" type="string" />
+<ResponseField name="permissions" type="array">Sorted list of granted permission key strings.</ResponseField>
+
+---
+
+## Error Reference
+
+| HTTP Status | Error Code | Reason |
+|---|---|---|
+| `401` | `AUTH_ERROR` | Missing or invalid JWT |
+| `403` | `PERMISSION_ERROR` | Insufficient role or permission |
+| `404` | `NOT_FOUND` | Resource not found |
+| `409` | `CONFLICT` | Department has assigned employees |
+| `422` | `VALIDATION_ERROR` | Invalid audience or field values |

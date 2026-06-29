@@ -1,0 +1,444 @@
+---
+title: "REST API Endpoints for Managing Projects and Tasks"
+sidebarTitle: "Projects & Tasks"
+description: "Submit projects for approval, then create and advance tasks within them. Includes complexity scoring, status transitions, and RBAC-scoped visibility."
+---
+
+The Projects and Tasks APIs work in tandem to model the organisation's work breakdown structure. Projects act as containers that require management approval before tasks can be created under them. Once a project is approved, managers and admins can create tasks, assign them to employees, advance them through a defined status lifecycle, and set complexity scores for workload analysis.
+
+<Note>
+  Project endpoints are prefixed `/api/v1/projects`; task endpoints are prefixed `/api/v1/tasks`. Both require an `Authorization: Bearer <token>` header.
+</Note>
+
+---
+
+## Enum Reference
+
+### Project Priority
+
+| Value | Description |
+|-------|-------------|
+| `low` | Background or nice-to-have work. |
+| `medium` | Standard delivery (default). |
+| `high` | Important delivery with near-term deadline. |
+| `critical` | Blocking or time-sensitive — requires immediate attention. |
+
+### Project Approval Status
+
+| Value | Description |
+|-------|-------------|
+| `pending` | Submitted and awaiting manager decision. |
+| `approved` | Approved — tasks may now be created. |
+| `rejected` | Declined; `rejected_reason` contains the explanation. |
+| `escalated` | Escalated to a senior approver. |
+| `cancelled` | Withdrawn before a decision was reached. |
+
+### Project Status
+
+| Value | Description |
+|-------|-------------|
+| `draft` | Created but not yet submitted for approval. |
+| `pending_approval` | Submitted and in the approval queue. |
+| `approved` | Approved by management. |
+| `active` | Actively in execution. |
+| `on_hold` | Temporarily paused. |
+| `completed` | All tasks done and project closed. |
+| `rejected` | Not approved. |
+| `archived` | Soft-deleted; excluded from default listings. |
+
+### Task Status
+
+| Value | Description |
+|-------|-------------|
+| `created` | Task created and awaiting assignment acknowledgement. |
+| `approved` | Approved and ready to be started. |
+| `in_progress` | Assignee is actively working on it. |
+| `blocked` | Progress is blocked; `blocked_reason` is set. |
+| `completed` | Assignee has marked it done. |
+| `reviewed` | Manager has reviewed and signed off. |
+| `reopened` | Sent back for rework after review. |
+| `archived` | Soft-deleted; excluded from default listings. |
+
+---
+
+## GET /projects
+
+List projects visible to the authenticated caller. Admins and HR see all projects; Managers see projects they own or manage; Employees see projects they are assigned to via tasks.
+
+**Auth:** Any authenticated user. Results are RBAC-scoped.
+
+### Query Parameters
+
+<ParamField query="approval_status" type="string">
+  Filter by approval status: `pending`, `approved`, `rejected`, `escalated`, `cancelled`.
+</ParamField>
+
+<ParamField query="project_status" type="string">
+  Filter by project lifecycle status: `draft`, `pending_approval`, `approved`, `active`, `on_hold`, `completed`, `rejected`, `archived`.
+</ParamField>
+
+<ParamField query="owner_id" type="uuid">
+  Return only projects created by this user UUID.
+</ParamField>
+
+<ParamField query="manager_id" type="uuid">
+  Return only projects assigned to this manager UUID.
+</ParamField>
+
+<ParamField query="include_archived" type="boolean">
+  Include archived projects. Default: `false`.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="[]" type="array">
+  Array of ProjectRead objects.
+
+  <Expandable title="ProjectRead">
+    <ResponseField name="id" type="uuid" required>Unique project identifier.</ResponseField>
+    <ResponseField name="title" type="string" required>Project name.</ResponseField>
+    <ResponseField name="description" type="string">Optional project description.</ResponseField>
+    <ResponseField name="owner_id" type="uuid" required>UUID of the user who submitted the project.</ResponseField>
+    <ResponseField name="owner_name" type="string">Resolved display name of the project owner.</ResponseField>
+    <ResponseField name="manager_id" type="uuid" required>UUID of the approving manager.</ResponseField>
+    <ResponseField name="manager_name" type="string">Resolved display name of the manager.</ResponseField>
+    <ResponseField name="priority" type="string" required>`low`, `medium`, `high`, or `critical`.</ResponseField>
+    <ResponseField name="approval_status" type="string" required>See approval status table above.</ResponseField>
+    <ResponseField name="project_status" type="string" required>See project status table above.</ResponseField>
+    <ResponseField name="due_date" type="date">Target completion date (`YYYY-MM-DD`).</ResponseField>
+    <ResponseField name="approved_at" type="datetime">Timestamp when the project was approved.</ResponseField>
+    <ResponseField name="rejected_reason" type="string">Reason provided when the project was rejected.</ResponseField>
+    <ResponseField name="progress_percentage" type="float">Computed percentage of completed tasks (0.0–100.0).</ResponseField>
+    <ResponseField name="created_at" type="datetime" required>Creation timestamp.</ResponseField>
+    <ResponseField name="updated_at" type="datetime" required>Last update timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/projects?approval_status=approved&project_status=active" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## POST /projects
+
+Submit a new project request for management approval. The project enters a `pending_approval` state until a manager or admin acts on it via `POST /projects/{id}/approve`.
+
+**Auth:** Any authenticated user.
+
+### Request Body
+
+<ParamField body="title" type="string" required>
+  Project name. 1–255 characters.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Detailed project description.
+</ParamField>
+
+<ParamField body="priority" type="string">
+  Urgency level: `low`, `medium` (default), `high`, or `critical`.
+</ParamField>
+
+<ParamField body="due_date" type="string">
+  Target completion date in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField body="manager_id" type="uuid">
+  UUID of the manager who should approve this project. Optional for admins who approve their own projects.
+</ParamField>
+
+### Response Fields
+
+Returns the created `ProjectRead` with `approval_status: "pending"` and HTTP 201.
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/projects" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Customer Portal Redesign Q3",
+    "description": "Full UI/UX overhaul of the self-service customer portal.",
+    "priority": "high",
+    "due_date": "2024-09-30",
+    "manager_id": "a1b2c3d4-0000-0000-0000-000000000001"
+  }'
+```
+
+---
+
+## POST /projects/{id}/approve
+
+Approve or reject a project that is pending approval. Only the assigned manager or an admin/HR operator may call this endpoint.
+
+**Auth:** Manager (own projects), Admin, or HR Operations.
+
+### Path Parameters
+
+<ParamField path="id" type="uuid" required>
+  UUID of the project to decide on.
+</ParamField>
+
+### Request Body
+
+<ParamField body="decision" type="string" required>
+  The outcome: `approved` or `rejected`.
+</ParamField>
+
+<ParamField body="reason" type="string">
+  Optional explanation. Strongly recommended when `decision` is `rejected`.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `ProjectRead` with `approval_status` set to `approved` or `rejected`, and `approved_at` or `rejected_reason` populated accordingly.
+
+<Tip>
+  Once a project is approved, task creation against it becomes unlocked. Use `GET /projects/task-eligible` to fetch only projects available for task creation.
+</Tip>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/projects/3fa85f64-5717-4562-b3fc-2c963f66afa6/approve" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "decision": "approved"
+  }'
+```
+
+---
+
+## GET /tasks
+
+List tasks visible to the authenticated caller. Results are automatically scoped: employees and interns see only tasks assigned to them; managers see their team's tasks; admins see all tasks.
+
+**Auth:** Any authenticated user. Results are RBAC-scoped.
+
+### Query Parameters
+
+<ParamField query="project_id" type="uuid">
+  Return only tasks belonging to this project.
+</ParamField>
+
+<ParamField query="assigned_to" type="uuid">
+  Return only tasks assigned to this user UUID.
+</ParamField>
+
+<ParamField query="status" type="string">
+  Filter by task status: `created`, `approved`, `in_progress`, `blocked`, `completed`, `reviewed`, `reopened`, `archived`.
+</ParamField>
+
+<ParamField query="include_archived" type="boolean">
+  Include archived tasks in results. Default: `false`.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="[]" type="array">
+  Array of TaskRead objects.
+
+  <Expandable title="TaskRead">
+    <ResponseField name="id" type="uuid" required>Unique task identifier.</ResponseField>
+    <ResponseField name="project_id" type="uuid" required>Parent project UUID.</ResponseField>
+    <ResponseField name="project_title" type="string">Resolved project name.</ResponseField>
+    <ResponseField name="assigned_to" type="uuid" required>UUID of the assigned employee.</ResponseField>
+    <ResponseField name="assigned_to_name" type="string">Resolved assignee display name.</ResponseField>
+    <ResponseField name="assigned_to_role" type="string">Assignee's role string.</ResponseField>
+    <ResponseField name="created_by" type="uuid" required>UUID of the user who created the task.</ResponseField>
+    <ResponseField name="created_by_name" type="string">Creator's display name.</ResponseField>
+    <ResponseField name="title" type="string" required>Task name.</ResponseField>
+    <ResponseField name="description" type="string">Detailed task description.</ResponseField>
+    <ResponseField name="parent_id" type="uuid">UUID of the parent task for subtask hierarchies.</ResponseField>
+    <ResponseField name="complexity_level" type="integer">Manager-assigned complexity score 1–10.</ResponseField>
+    <ResponseField name="expected_duration_minutes" type="integer">Estimated effort in minutes set alongside `complexity_level`.</ResponseField>
+    <ResponseField name="actual_duration_minutes" type="integer">Computed from time logs once work begins.</ResponseField>
+    <ResponseField name="priority" type="string" required>`low`, `medium`, `high`, or `critical`.</ResponseField>
+    <ResponseField name="status" type="string" required>Current task lifecycle status.</ResponseField>
+    <ResponseField name="blocked_reason" type="string">Reason the task is blocked; present when `status` is `blocked`.</ResponseField>
+    <ResponseField name="due_date" type="date">Target completion date.</ResponseField>
+    <ResponseField name="completed_at" type="datetime">Timestamp of completion.</ResponseField>
+    <ResponseField name="completed_by" type="uuid">UUID of the user who completed the task.</ResponseField>
+    <ResponseField name="can_complete" type="boolean">Whether the authenticated caller may mark this task complete.</ResponseField>
+    <ResponseField name="can_update_status" type="boolean">Whether the caller may change the task status.</ResponseField>
+    <ResponseField name="can_start_timer" type="boolean">Whether the caller may start a time-log timer on this task.</ResponseField>
+    <ResponseField name="created_at" type="datetime" required>Creation timestamp.</ResponseField>
+    <ResponseField name="updated_at" type="datetime" required>Last update timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/tasks?project_id=3fa85f64-5717-4562-b3fc-2c963f66afa6&status=in_progress" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## POST /tasks
+
+Create a new task within an approved project and assign it to an employee. The parent project must have `approval_status: "approved"`.
+
+**Auth:** Manager, Admin, or HR Operations.
+
+### Request Body
+
+<ParamField body="project_id" type="uuid" required>
+  UUID of the approved project this task belongs to.
+</ParamField>
+
+<ParamField body="assigned_to" type="uuid" required>
+  UUID of the employee to assign this task to.
+</ParamField>
+
+<ParamField body="title" type="string" required>
+  Task name. 1–255 characters.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Detailed description of what needs to be done.
+</ParamField>
+
+<ParamField body="priority" type="string">
+  Task urgency: `low`, `medium` (default), `high`, or `critical`.
+</ParamField>
+
+<ParamField body="due_date" type="string">
+  Target completion date in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField body="parent_id" type="uuid">
+  UUID of a parent task to create this as a subtask.
+</ParamField>
+
+### Response Fields
+
+Returns the created `TaskRead` with HTTP 201.
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/tasks" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "assigned_to": "b4c5d6e7-0000-0000-0000-000000000002",
+    "title": "Implement OAuth2 login flow",
+    "description": "Add Google SSO using OAuth2 PKCE flow. Cover both web and mobile redirect URIs.",
+    "priority": "high",
+    "due_date": "2024-08-15"
+  }'
+```
+
+---
+
+## PATCH /tasks/{id}
+
+Update one or more fields of an existing task, including advancing the status through the lifecycle. Employees can move tasks between `approved`, `in_progress`, and `blocked`; Managers can additionally move to `reviewed` or `reopened`; Admins have unrestricted access.
+
+**Auth:** Any authenticated user. Permitted transitions are enforced by RBAC.
+
+### Path Parameters
+
+<ParamField path="id" type="uuid" required>
+  UUID of the task to update.
+</ParamField>
+
+### Request Body
+
+<ParamField body="title" type="string">
+  Updated task name.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated task description.
+</ParamField>
+
+<ParamField body="assigned_to" type="uuid">
+  Re-assign task to a different employee UUID.
+</ParamField>
+
+<ParamField body="priority" type="string">
+  Updated priority: `low`, `medium`, `high`, or `critical`.
+</ParamField>
+
+<ParamField body="due_date" type="string">
+  Updated due date in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField body="status" type="string">
+  New task status. Valid values depend on the caller's role and current task state.
+</ParamField>
+
+<ParamField body="blocked_reason" type="string">
+  Required when setting `status` to `blocked`. Explain the blocker.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `TaskRead` object.
+
+```bash Example — Move to in_progress
+curl -X PATCH "https://api.example.com/api/v1/tasks/3fa85f64-5717-4562-b3fc-2c963f66afa6" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "in_progress"
+  }'
+```
+
+---
+
+## POST /tasks/{id}/complexity
+
+Set the complexity level and expected duration for a task. This data feeds into workload analysis and burndown reports. Only Managers and Admins can call this endpoint.
+
+**Auth:** Manager or Admin only.
+
+### Path Parameters
+
+<ParamField path="id" type="uuid" required>
+  UUID of the task to score.
+</ParamField>
+
+### Request Body
+
+<ParamField body="complexity_level" type="integer" required>
+  Complexity score from `1` (trivial) to `10` (extremely complex).
+</ParamField>
+
+<ParamField body="expected_duration_minutes" type="integer" required>
+  Estimated effort in minutes. Must be greater than 0.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `TaskRead` with `complexity_level` and `expected_duration_minutes` set.
+
+<Warning>
+  Calling this endpoint without `manager` or `admin` role returns `403 PERMISSION_ERROR`. Team leads and employees cannot set complexity scores.
+</Warning>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/tasks/3fa85f64-5717-4562-b3fc-2c963f66afa6/complexity" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "complexity_level": 7,
+    "expected_duration_minutes": 480
+  }'
+```
+
+---
+
+## Standard Error Response
+
+```json
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Project not found or you do not have access.",
+    "details": []
+  }
+}
+```
+
+Common error codes: `AUTH_ERROR`, `PERMISSION_ERROR`, `NOT_FOUND`, `CONFLICT`, `VALIDATION_ERROR`.

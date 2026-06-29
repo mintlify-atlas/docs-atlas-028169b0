@@ -1,0 +1,172 @@
+---
+title: "Roles and Permissions: RBAC Model Explained"
+sidebarTitle: "Roles & Permissions"
+description: "Detailed breakdown of the six-level role hierarchy, per-role capabilities and data visibility, the full permissions matrix, and hierarchical scoping rules."
+---
+
+The Workforce OS enforces a Role-Based Access Control (RBAC) model combined with hierarchical scope checks to ensure data security and operational integrity. Every API route is protected by FastAPI dependencies that verify both the caller's role and their ownership or reporting scope before any data is returned or mutated.
+
+## Role Hierarchy
+
+Roles are ordered from highest to lowest privilege. Each level inherits the spirit of the roles below it but gains progressively broader visibility and write access:
+
+```
+Admin  →  HR / Operations  →  Manager  →  Team Lead  →  Employee  →  Intern / Junior Employee
+```
+
+<Note>
+  UUIDs are internal technical values only. All user-facing UI must display **human-readable labels** — full names, department names, shift names — never raw IDs.
+</Note>
+
+## Role Definitions
+
+<Tabs>
+  <Tab title="Admin">
+    **Purpose**: Full system governance and technical administration.
+
+    **Key Actions**:
+    - Create and manage all user accounts, including other Admins and Managers.
+    - View organisation-wide analytics and all employee data.
+    - Configure system settings, shifts, and organisational structure.
+    - Access and export all audit logs.
+    - Override or resolve any pending approvals.
+
+    **Data Visibility**: **Global** — unrestricted access to all records across all departments.
+
+    **Permissions**: All permissions in the system (see matrix below).
+  </Tab>
+  <Tab title="HR / Operations">
+    **Purpose**: Operational management of the workforce.
+
+    **Key Actions**:
+    - Manage user profiles and onboarding workflows.
+    - Configure departments, shifts, and holiday calendars.
+    - Create and publish company-wide announcements.
+    - Generate organisation-wide reports (attendance, leaves, performance).
+    - Monitor system alerts and approve attendance corrections.
+
+    **Data Visibility**: **Global** — all employee data except sensitive technical/system settings restricted to Admin.
+
+    **Permissions**: `users.*` (no deactivate/suspend/roles), `attendance.*`, `leave.*`, `reports.*`, `announcements.create`, `holidays.manage`, `shifts.manage`, `departments.manage`, `analytics.view_org`.
+  </Tab>
+  <Tab title="Manager">
+    **Purpose**: Team-level execution and workload management.
+
+    **Key Actions**:
+    - Approve or reject project requests and leave/WFH/half-day requests from direct reports.
+    - Define task complexity and expected duration for team tasks.
+    - Review EOD reports and team growth metrics.
+    - View team-specific analytics and alerts.
+
+    **Blocked Actions**: Cannot manage users outside their direct reporting line; cannot change global org settings.
+
+    **Data Visibility**: **Scoped to direct and indirect reports** within their assigned departments.
+
+    **Permissions**: `users.create`, `users.edit`, `attendance.view_team`, `attendance.approve_correction`, `leave.approve`, `projects.approve`, `tasks.create_team`, `tasks.set_complexity`, `eod.approve`, `reports.view_team`, `analytics.view_team`.
+  </Tab>
+  <Tab title="Team Lead">
+    **Purpose**: First-level supervision and technical guidance.
+
+    **Key Actions**:
+    - View team task progress and time logs.
+    - Assist in task assignment (if permitted by the Manager).
+    - Review team attendance history and EOD submissions.
+
+    **Data Visibility**: **Scoped to their assigned team members** only.
+
+    **Permissions**: `attendance.view_team`, `leave.view_team`, `projects.create`, `tasks.create_team`, `tasks.set_priority`, `tasks.view_team`, `eod.review`, `reports.view_team`, `analytics.view_team`.
+  </Tab>
+  <Tab title="Employee">
+    **Purpose**: Individual work execution and accountability.
+
+    **Key Actions**:
+    - Check-in/check-out and log work sessions.
+    - Submit project requests and create tasks.
+    - Submit leave/WFH/half-day requests.
+    - View own performance trends and growth metrics.
+
+    **Data Visibility**: **Own data only.**
+
+    **Permissions**: `attendance.view_own`, `leave.apply`, `projects.create`, `tasks.create_own`, `eod.submit`, `reports.view_own`.
+  </Tab>
+  <Tab title="Intern / Junior Employee">
+    **Purpose**: Learning and assisted execution.
+
+    **Key Actions**: Same as Employee, but with additional scrutiny and potential assignment limits. In some modules, interns may require explicit approval for tasks that are auto-approved for senior employees (policy varies by department).
+
+    **Data Visibility**: **Own data only.**
+
+    **Permissions** (`BASIC_EMPLOYEE_RESTRICTED` bundle): `attendance.view_own`, `leave.apply`, `tasks.create_own`, `eod.submit`, `reports.view_own`.
+
+    <Note>
+      `Intern` and `Junior Employee` share an identical permission bundle (`BASIC_EMPLOYEE_RESTRICTED`) defined in `apps/api/app/core/permissions.py`.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Permissions Matrix
+
+The table below summarises the most commonly checked permission keys across all functional areas. `✅` = granted, `❌` = denied, `⚠️` = own-data or limited scope only, `👁️` = view-only.
+
+| Permission Key | Admin | HR/Ops | Manager | Team Lead | Employee | Intern |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| `users.view_all` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `users.create` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `users.edit` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `users.deactivate` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `users.suspend` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `users.manage_roles` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `attendance.view_own` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `attendance.view_team` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `attendance.view_org` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `attendance.approve_correction` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `leave.apply` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `leave.approve` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `leave.view_team` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `leave.view_org` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `projects.create` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| `projects.approve` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `projects.view_all` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `tasks.create_own` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `tasks.create_team` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `tasks.set_priority` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `tasks.set_complexity` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `tasks.view_team` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `eod.submit` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `eod.review` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `eod.approve` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `reports.view_own` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `reports.view_team` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `reports.view_org` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `announcements.create` | ✅ | ✅ | ❌ | ❌ | 👁️ | 👁️ |
+| `holidays.manage` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `shifts.manage` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `departments.manage` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `audit.view` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `call_recordings.view` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `call_recordings.download` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `call_recordings.delete` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `permissions.manage` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `analytics.view_team` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `analytics.view_org` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+<Info>
+  The canonical source of truth for role–permission mappings is `apps/api/app/core/permissions.py` (`ROLE_PERMISSIONS` dict). The table above reflects that file exactly — always refer to the source when in doubt.
+</Info>
+
+## Hierarchical Rules
+
+Three additional scoping rules layer on top of the static role permissions to prevent cross-team data leakage:
+
+**Manager Mapping**
+Every non-Admin user should have a reporting manager assigned. This mapping drives which users a Manager or Team Lead can act on behalf of, approve requests for, or view data about.
+
+**Department Scoping**
+Managers and Team Leads are associated with specific departments. API-level scope checks ensure they can only query or mutate data belonging to their assigned departments — the `*_team` permission keys are meaningless without this department association.
+
+**Ownership Check**
+Even when a user holds the `Employee` role, they can only modify entities they own (e.g., their own tasks or leave requests). The service layer enforces this regardless of which role-level permissions are granted.
+
+<Warning>
+  Managers can **view** team member profiles but **cannot** create or deactivate users outside their direct reporting line, and cannot change global organisation settings such as shifts or departments. Those actions require `HR/Operations` or `Admin`.
+</Warning>

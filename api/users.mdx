@@ -1,0 +1,285 @@
+---
+title: "REST API Reference: Employee User Management Endpoints"
+sidebarTitle: "Users"
+description: "Create, retrieve, and update employee profiles with full RBAC enforcement. Every endpoint requires a valid JWT bearer token and returns a UserRead object."
+---
+
+The Users API is the central registry for every person in your organisation. It lets authorised callers enumerate the workforce, onboard new employees, and update profile or status fields while the platform's role-based access-control layer automatically scopes what each caller may see or change.
+
+<Note>
+  All endpoints in this section are prefixed with `/api/v1/users` and require an `Authorization: Bearer <token>` header obtained from `POST /api/v1/auth/login`.
+</Note>
+
+---
+
+## GET /users
+
+List all users visible to the authenticated caller. Results are automatically scoped by role: Admins and HR see the full directory; Managers see their own reports plus colleagues; Employees see limited colleagues.
+
+**Auth:** Any authenticated user. Scope is enforced server-side.
+
+### Query Parameters
+
+<ParamField query="role" type="string">
+  Filter by role. Accepted values: `admin`, `hr_operations`, `manager`, `team_lead`, `employee`, `junior_employee`, `intern`.
+</ParamField>
+
+<ParamField query="department" type="string">
+  Filter by department name string (case-insensitive partial match).
+</ParamField>
+
+<ParamField query="manager_id" type="uuid">
+  Return only direct reports of the specified manager UUID.
+</ParamField>
+
+<ParamField query="status" type="string">
+  Filter by account status. Accepted values: `active`, `inactive`, `suspended`, `invited`.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="[]" type="array">
+  Array of UserRead objects.
+
+  <Expandable title="UserRead">
+    <ResponseField name="id" type="uuid" required>Unique user identifier.</ResponseField>
+    <ResponseField name="full_name" type="string" required>Display name of the employee.</ResponseField>
+    <ResponseField name="email" type="string" required>Work email address.</ResponseField>
+    <ResponseField name="phone" type="string">Optional phone number.</ResponseField>
+    <ResponseField name="role" type="string" required>One of `admin`, `hr_operations`, `manager`, `team_lead`, `employee`, `junior_employee`, `intern`.</ResponseField>
+    <ResponseField name="status" type="string" required>Account status: `active`, `inactive`, `suspended`, or `invited`.</ResponseField>
+    <ResponseField name="department" type="string">Department name string.</ResponseField>
+    <ResponseField name="department_id" type="uuid">Foreign key to the departments table.</ResponseField>
+    <ResponseField name="department_name" type="string">Resolved department display name.</ResponseField>
+    <ResponseField name="designation" type="string">Job title / designation.</ResponseField>
+    <ResponseField name="manager_id" type="uuid">UUID of the direct line manager.</ResponseField>
+    <ResponseField name="manager_name" type="string">Resolved manager display name.</ResponseField>
+    <ResponseField name="shift_id" type="uuid">Assigned shift UUID.</ResponseField>
+    <ResponseField name="shift_name" type="string">Shift display name, e.g. `Morning Shift`.</ResponseField>
+    <ResponseField name="shift_timing" type="string">Human-readable shift hours, e.g. `09:00 – 18:00`.</ResponseField>
+    <ResponseField name="avatar_url" type="string">Profile picture URL.</ResponseField>
+    <ResponseField name="presence_status" type="string">Real-time presence: `active` or `away`.</ResponseField>
+    <ResponseField name="online_state" type="string">`online` or `offline`.</ResponseField>
+    <ResponseField name="is_online" type="boolean">Convenience flag derived from `online_state`.</ResponseField>
+    <ResponseField name="created_at" type="datetime">ISO-8601 account creation timestamp.</ResponseField>
+    <ResponseField name="updated_at" type="datetime">ISO-8601 last update timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/users?role=employee&department=Engineering" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## POST /users
+
+Create a new user account and send an invitation email. The new user must activate their account via the emailed link before they can log in.
+
+**Auth:** `admin` or `hr_operations` role required.
+
+### Request Body
+
+<ParamField body="full_name" type="string" required>
+  Employee's full name. 1–255 characters.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Work email address. Must be unique across the organisation.
+</ParamField>
+
+<ParamField body="role" type="string" required>
+  Initial role. One of `admin`, `hr_operations`, `manager`, `team_lead`, `employee`, `junior_employee`, `intern`.
+</ParamField>
+
+<ParamField body="password" type="string">
+  Optional pre-set password (min 8 chars). If omitted, the user sets their password during activation.
+</ParamField>
+
+<ParamField body="phone" type="string">
+  Contact phone number.
+</ParamField>
+
+<ParamField body="department" type="string">
+  Department name string (legacy field).
+</ParamField>
+
+<ParamField body="department_id" type="uuid">
+  Preferred — UUID of the department record.
+</ParamField>
+
+<ParamField body="shift_id" type="uuid">
+  UUID of the assigned work shift.
+</ParamField>
+
+<ParamField body="designation" type="string">
+  Job title, e.g. `Senior Engineer`.
+</ParamField>
+
+<ParamField body="manager_id" type="uuid">
+  UUID of the direct line manager.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="user" type="UserRead" required>
+  Full profile of the newly created user (see UserRead fields above).
+</ResponseField>
+
+<ResponseField name="invitation_email_sent" type="boolean" required>
+  `true` when the activation email was dispatched successfully.
+</ResponseField>
+
+<ResponseField name="email_error" type="string">
+  SMTP error message if the invitation email failed; otherwise `null`.
+</ResponseField>
+
+<ResponseField name="debug_token" type="string">
+  Activation token returned only in `development` environment — never present in production.
+</ResponseField>
+
+<Warning>
+  This endpoint is restricted to `admin` and `hr_operations` roles. Calling it with any other role returns `403 PERMISSION_ERROR`.
+</Warning>
+
+```bash Example
+curl -X POST "https://api.example.com/api/v1/users" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "full_name": "Ayesha Raza",
+    "email": "ayesha.raza@company.com",
+    "role": "employee",
+    "department_id": "b2c3d4e5-0000-0000-0000-000000000001",
+    "shift_id": "a1b2c3d4-0000-0000-0000-000000000002",
+    "designation": "Software Engineer",
+    "manager_id": "f7e6d5c4-0000-0000-0000-000000000003"
+  }'
+```
+
+---
+
+## GET /users/me
+
+Return the full profile of the currently authenticated user, enriched with live presence and online-state data.
+
+**Auth:** Any authenticated user.
+
+### Response Fields
+
+Returns a single `UserRead` object. See [GET /users](#get-users) for the full field list.
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/users/me" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## GET /users/{id}
+
+Retrieve the profile of a specific user by their UUID. Access is subject to role-scoping: Employees can only view users within their own visibility boundary; Managers can view their reports; Admins and HR can view anyone.
+
+**Auth:** Any authenticated user. View access is RBAC-scoped.
+
+### Path Parameters
+
+<ParamField path="id" type="uuid" required>
+  UUID of the target user.
+</ParamField>
+
+### Response Fields
+
+Returns a single `UserRead` object (see field table under [GET /users](#get-users)).
+
+```bash Example
+curl -X GET "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## PATCH /users/{id}
+
+Update a user's profile fields or account status. Callers may only update fields they are authorised to change: employees can update their own `full_name` and `phone`; Managers can update their direct reports; Admins and HR can update any field including `role` and `status`.
+
+**Auth:** Any authenticated user. Write permissions are RBAC-enforced per field.
+
+### Path Parameters
+
+<ParamField path="id" type="uuid" required>
+  UUID of the user to update.
+</ParamField>
+
+### Request Body
+
+<ParamField body="full_name" type="string">
+  Updated display name. 1–255 characters.
+</ParamField>
+
+<ParamField body="phone" type="string">
+  Updated contact phone number.
+</ParamField>
+
+<ParamField body="department" type="string">
+  Department name string (legacy).
+</ParamField>
+
+<ParamField body="department_id" type="uuid">
+  UUID of the new department.
+</ParamField>
+
+<ParamField body="shift_id" type="uuid">
+  UUID of the new shift.
+</ParamField>
+
+<ParamField body="designation" type="string">
+  Updated job title.
+</ParamField>
+
+<ParamField body="manager_id" type="uuid">
+  UUID of the new direct-line manager.
+</ParamField>
+
+<ParamField body="status" type="string">
+  New account status: `active`, `inactive`, `suspended`, or `invited`. Admin/HR only.
+</ParamField>
+
+<ParamField body="role" type="string">
+  New role assignment. Admin/HR only.
+</ParamField>
+
+### Response Fields
+
+Returns the updated `UserRead` object.
+
+<Tip>
+  To change a user's password as an admin, use `POST /users/{id}/send-password-reset` which emails the user a secure reset link rather than accepting a raw password value.
+</Tip>
+
+```bash Example
+curl -X PATCH "https://api.example.com/api/v1/users/3fa85f64-5717-4562-b3fc-2c963f66afa6" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "designation": "Lead Engineer",
+    "shift_id": "d4e5f6a7-0000-0000-0000-000000000004"
+  }'
+```
+
+---
+
+## Standard Error Response
+
+```json
+{
+  "error": {
+    "code": "PERMISSION_ERROR",
+    "message": "You do not have permission to update this user.",
+    "details": []
+  }
+}
+```
+
+Common error codes for this resource: `AUTH_ERROR`, `PERMISSION_ERROR`, `NOT_FOUND`, `CONFLICT`.

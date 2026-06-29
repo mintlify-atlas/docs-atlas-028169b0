@@ -1,0 +1,404 @@
+---
+title: "Local Development Environment Setup: Full Stack Guide"
+sidebarTitle: "Local Dev"
+description: "Set up the Workforce Intelligence & Execution OS local environment — env vars, backend, frontend, Celery worker, database seeding, and error fixes."
+---
+
+The **Workforce Intelligence & Execution OS** local development environment consists of three concurrently running processes — the FastAPI backend, the Next.js 15 frontend, and the Celery background worker — backed by either a local SQLite database or PostgreSQL, and a Redis instance. This guide covers every step from prerequisites through environment configuration, service startup, database management, and resolving common development errors.
+
+## Prerequisites
+
+Ensure the following are installed before proceeding:
+
+| Tool | Required Version | Notes |
+|---|---|---|
+| **Node.js** | v18.x or v20.x | `node --version` to verify |
+| **Python** | 3.10 or 3.11 | `python --version` to verify |
+| **Redis** | Latest stable | Can be run via Docker or as a local service |
+| **Git** | Any recent version | For cloning and version control |
+| **PostgreSQL** | 14+ (optional) | SQLite is used by default locally |
+
+<Tip>
+  If you don't want to install Redis locally, you can start it with a single Docker command: `docker run -d -p 6379:6379 --name redis redis:latest`
+</Tip>
+
+---
+
+## Environment Configuration
+
+All configuration is managed via a single `.env` file in the repository root. Start by copying the example:
+
+```bash
+cp .env.example .env
+```
+
+The following table documents every variable in `.env.example`:
+
+### Frontend Variables (`apps/web`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `NEXT_PUBLIC_APP_NAME` | `Workforce Intelligence & Execution OS` | Display name shown in the browser tab and UI header |
+| `NEXT_PUBLIC_API_URL` | `/api/v1` | Public-facing API base URL; Next.js proxies this to `API_PROXY_URL` locally |
+| `API_PROXY_URL` | `http://localhost:8080/api/v1` | Internal proxy target — the FastAPI server address as seen by the Next.js server |
+
+### Backend Variables (`apps/api`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `APP_ENV` | `development` | Runtime environment; controls debug mode and logging verbosity |
+| `APP_HOST` | `0.0.0.0` | Host binding for the Uvicorn server |
+| `APP_PORT` | `8080` | Port for the FastAPI server |
+| `APP_SECRET_KEY` | `change-me-locally` | **Required.** Secret used to sign and verify JWT tokens. Must be a long random string. |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Lifetime of short-lived JWT access tokens |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Lifetime of JWT refresh tokens |
+| `ONLINE_PRESENCE_TTL_SECONDS` | `90` | User is considered online if a heartbeat was received within this window (seconds) |
+
+### Database Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/workforce_intelligence_utf8` | SQLAlchemy connection string. Comment out to use the SQLite fallback. |
+| `DATABASE_PUBLIC_URL` | _(empty)_ | Public-facing database URL for Railway or other cloud deployments |
+| `PGDATABASE` | `workforce_intelligence_utf8` | PostgreSQL database name |
+| `PGHOST` | `localhost` | PostgreSQL host |
+| `PGPORT` | `5432` | PostgreSQL port |
+| `PGUSER` | `postgres` | PostgreSQL user |
+| `PGPASSWORD` | `postgres` | PostgreSQL password |
+
+<Info>
+  PostgreSQL databases **must use UTF-8 encoding** to support emoji and Unicode content in messages. Create the database with:
+  ```sql
+  CREATE DATABASE workforce_intelligence_utf8
+    WITH ENCODING 'UTF8'
+    TEMPLATE template0
+    LC_COLLATE='C'
+    LC_CTYPE='C';
+  ```
+</Info>
+
+<Tip>
+  To use **SQLite** for local development with zero database setup, comment out the `DATABASE_URL` line in your `.env` file. The backend automatically falls back to a local `workforce_intelligence.db` file.
+</Tip>
+
+### Redis & Celery
+
+| Variable | Default | Description |
+|---|---|---|
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string used by Celery as its message broker |
+
+### CORS & Frontend Origin
+
+| Variable | Default | Description |
+|---|---|---|
+| `FRONTEND_BASE_URL` | `http://localhost:3002` | Base URL of the frontend, used for generating links in emails |
+| `CORS_ORIGINS` | `http://localhost:3000,...` | Comma-separated list of allowed CORS origins for the FastAPI backend |
+
+### Email (Optional Locally)
+
+| Variable | Default | Description |
+|---|---|---|
+| `SMTP_TLS` | `True` | Enable TLS for SMTP connections |
+| `SMTP_PORT` | `587` | SMTP server port |
+| `SMTP_HOST` | _(empty)_ | SMTP server hostname (leave empty to disable email locally) |
+| `SMTP_USER` | _(empty)_ | SMTP authentication username |
+| `SMTP_PASSWORD` | _(empty)_ | SMTP authentication password |
+| `EMAILS_FROM_EMAIL` | `info@example.com` | Sender address for outgoing emails |
+| `EMAILS_FROM_NAME` | `Workforce OS` | Sender display name for outgoing emails |
+
+### Bootstrap Admin
+
+| Variable | Default | Description |
+|---|---|---|
+| `BOOTSTRAP_ADMIN_EMAIL` | `admin@example.com` | Email address of the auto-created first admin user |
+| `BOOTSTRAP_ADMIN_PASSWORD` | `change-this-password` | Password for the bootstrap admin. **Change this before any shared deployment.** |
+| `BOOTSTRAP_ADMIN_NAME` | `HR Admin` | Display name for the bootstrap admin user |
+
+### Profile Storage
+
+| Variable | Default | Description |
+|---|---|---|
+| `PROFILE_IMAGE_STORAGE` | `local` | Storage backend for profile pictures. `local` stores files on disk. |
+| `PROFILE_IMAGE_UPLOAD_DIR` | `storage/profile-pictures` | Local directory path for uploaded profile images |
+| `PROFILE_IMAGE_PUBLIC_BASE_URL` | _(empty)_ | Public base URL for serving stored profile images |
+
+### Attendance & Timezone
+
+| Variable | Default | Description |
+|---|---|---|
+| `BUSINESS_TIMEZONE` | `Asia/Karachi` | IANA timezone used for shift windows, roster management, and end-of-day processing |
+
+### Web Push (Optional)
+
+| Variable | Default | Description |
+|---|---|---|
+| `VAPID_PUBLIC_KEY` | _(empty)_ | VAPID public key for browser push notifications |
+| `VAPID_PRIVATE_KEY` | _(empty)_ | VAPID private key for browser push notifications |
+| `VAPID_SUBJECT` | _(empty)_ | Contact email for VAPID, e.g. `mailto:admin@example.com` |
+
+Generate VAPID keys with:
+```bash
+npx web-push generate-vapid-keys
+```
+
+---
+
+## Backend Setup
+
+<Steps>
+
+  <Step title="Navigate to the API directory">
+    ```bash
+    cd apps/api
+    ```
+  </Step>
+
+  <Step title="Create and activate a virtual environment">
+    <CodeGroup>
+
+    ```bash macOS / Linux
+    python -m venv venv
+    source venv/bin/activate
+    ```
+
+    ```powershell Windows (PowerShell)
+    python -m venv venv
+    .\venv\Scripts\Activate.ps1
+    ```
+
+    </CodeGroup>
+  </Step>
+
+  <Step title="Install Python dependencies">
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    This installs all backend packages including `fastapi`, `uvicorn`, `sqlalchemy`, `alembic`, `celery`, `redis`, `psycopg2-binary`, and `pydantic` v2.
+  </Step>
+
+  <Step title="Start the API server">
+    <CodeGroup>
+
+    ```bash macOS / Linux
+    uvicorn app.main:app --host 0.0.0.0 --port 8080
+    ```
+
+    ```powershell Windows (PowerShell)
+    python -m uvicorn app.main:app --host 0.0.0.0 --port 8080
+    ```
+
+    </CodeGroup>
+
+    The API is available at `http://localhost:8080`. Swagger UI is at `http://localhost:8080/docs`.
+
+    Alternatively, you can start via the `main.py` entry point:
+    ```bash
+    python main.py
+    ```
+  </Step>
+
+</Steps>
+
+---
+
+## Database Initialisation & Seeding
+
+<Steps>
+
+  <Step title="Run Alembic migrations">
+    From the `apps/api` directory with your virtual environment active:
+
+    ```bash
+    alembic upgrade head
+    ```
+
+    This creates all database tables and applies any pending schema migrations.
+  </Step>
+
+  <Step title="Seed the database (optional)">
+    Load reference and sample data:
+
+    ```bash
+    python seed.py
+    ```
+  </Step>
+
+  <Step title="Bootstrap admin auto-creation">
+    The API automatically seeds permissions and creates the bootstrap admin user on first startup using the `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` values in your `.env` file. No manual step is needed.
+  </Step>
+
+</Steps>
+
+---
+
+## Frontend Setup
+
+<Steps>
+
+  <Step title="Install dependencies from the monorepo root">
+    ```bash
+    # From the repository root
+    npm install
+    ```
+
+    npm workspaces installs dependencies for `apps/web` and all shared `packages/` in one command.
+  </Step>
+
+  <Step title="Start the Next.js development server">
+    <CodeGroup>
+
+    ```bash From root (recommended)
+    npm run dev:web
+    ```
+
+    ```bash From apps/web directly
+    cd apps/web
+    npm run dev
+    ```
+
+    </CodeGroup>
+
+    The web application is available at `http://localhost:3000`.
+  </Step>
+
+</Steps>
+
+---
+
+## Worker Setup (Celery)
+
+<Steps>
+
+  <Step title="Ensure Redis is running">
+    <CodeGroup>
+
+    ```bash Local Redis
+    redis-server
+    ```
+
+    ```bash Docker
+    docker run -d -p 6379:6379 --name redis redis:latest
+    ```
+
+    </CodeGroup>
+  </Step>
+
+  <Step title="Start the Celery worker">
+    From the `apps/api` directory with your virtual environment active:
+
+    <CodeGroup>
+
+    ```bash macOS / Linux
+    celery -A app.worker worker --loglevel=info
+    ```
+
+    ```powershell Windows (PowerShell)
+    python -m celery -A app.worker worker --loglevel=info --pool=solo
+    ```
+
+    </CodeGroup>
+
+    <Note>
+      The `--pool=solo` flag is required on **Windows** because Celery's default prefork multiprocessing pool is not fully supported. On macOS and Linux, omit this flag.
+    </Note>
+  </Step>
+
+</Steps>
+
+---
+
+## Useful Development Commands
+
+### Frontend
+
+| Command | What it does |
+|---|---|
+| `npm run dev:web` | Start Next.js dev server (from repo root) |
+| `npm run build:web` | Production build of the web app |
+| `cd apps/web && npm run lint` | Run ESLint on the frontend codebase |
+| `cd apps/web && npm test` | Run the frontend test suite |
+
+### Backend
+
+| Command | What it does |
+|---|---|
+| `uvicorn app.main:app --host 0.0.0.0 --port 8080` | Start the FastAPI server |
+| `alembic upgrade head` | Apply all pending migrations |
+| `alembic revision --autogenerate -m "description"` | Generate a new migration from model changes |
+| `flake8` | Run Python linting (from `apps/api`) |
+
+### Database Reset (SQLite)
+
+To fully reset the local SQLite database:
+
+```bash
+# From apps/api
+rm workforce_intelligence.db
+alembic upgrade head
+# Restart the API — bootstrap admin is recreated on startup
+```
+
+---
+
+## Common Errors and Fixes
+
+<Warning>
+  Always ensure all three services (API, worker, Redis) are running before testing end-to-end flows. Many errors are caused by a partially started stack.
+</Warning>
+
+### `ChunkLoadError` in the Browser
+
+**Symptom:** The Next.js frontend throws a `ChunkLoadError` after a code change or interrupted build.
+
+**Cause:** Stale or corrupted `.next` build cache.
+
+**Fix:**
+```bash
+cd apps/web
+rm -rf .next
+npm run dev
+```
+
+### Redis Connection Refused
+
+**Symptom:** The Celery worker fails to start or background jobs are not processed. Error message includes `redis.exceptions.ConnectionError: Error 111 connecting to localhost:6379`.
+
+**Cause:** The Redis server is not running, or `REDIS_URL` in `.env` is incorrect.
+
+**Fix:**
+1. Start Redis: `redis-server` or `docker run -d -p 6379:6379 redis`
+2. Verify the `REDIS_URL` in your `.env` matches where Redis is listening:
+   ```bash .env
+   REDIS_URL=redis://localhost:6379/0
+   ```
+
+### Database Locked (SQLite)
+
+**Symptom:** SQL errors mentioning `database is locked` when performing write operations.
+
+**Cause:** SQLite does not support concurrent writes. When both the API server and the Celery worker attempt to write simultaneously, one process will be blocked.
+
+**Fix:** Restart both the API server and the Celery worker. For persistent concurrent write needs, switch to **PostgreSQL** by setting `DATABASE_URL` in your `.env`.
+
+### `APP_SECRET_KEY` Not Set
+
+**Symptom:** JWT token signing fails; login returns 500 errors immediately after startup.
+
+**Cause:** `APP_SECRET_KEY` is still set to the placeholder value `change-me-locally` or is missing.
+
+**Fix:** Set a strong, unique secret in your `.env`:
+```bash .env
+APP_SECRET_KEY=a-long-random-string-at-least-32-characters
+```
+
+### CORS Errors in the Browser
+
+**Symptom:** API requests from the frontend fail with `Access-Control-Allow-Origin` errors in the browser console.
+
+**Cause:** The frontend's origin (`http://localhost:3000`) is not listed in `CORS_ORIGINS`.
+
+**Fix:** Ensure the frontend URL is included in `.env`:
+```bash .env
+CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:3002,http://127.0.0.1:3000
+```

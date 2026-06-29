@@ -1,0 +1,279 @@
+---
+title: "Attendance Tracking, Breaks, and Shift Management"
+sidebarTitle: "Attendance"
+description: "Learn how attendance sessions, break types, shift boundaries, PKT timezone handling, and correction workflows keep daily activity records accurate."
+---
+
+The Attendance module is the operational heartbeat of the platform. Every working day begins with a check-in that opens a session and ends with a check-out that closes it, calculating worked minutes and automatically classifying the day. Managers gain real-time visibility through team views, and employees can request corrections when timestamps are wrong — all without leaving the dashboard.
+
+## Shift Configuration
+
+The platform ships with a single standard shift definition. All comparisons between check-in/out times and shift boundaries use **Asia/Karachi (PKT)** as the reference timezone, even though every timestamp is stored in UTC.
+
+| Field | Value |
+|---|---|
+| Shift start | 5:00 PM PKT |
+| Shift end | 2:00 AM PKT (next calendar day) |
+| Duration | 9 hours |
+| Timezone | Asia/Karachi (UTC+5) |
+
+<Note>
+All dashboard views, reports, and duration labels must render times in **PKT**. Durations display as `HH:mm` (e.g., `08:45`), not raw minutes. Internal UUIDs are never shown — use the employee's full name and the shift name instead.
+</Note>
+
+## Work Modes
+
+When an employee checks in, they declare one of two work modes:
+
+| Enum value | Meaning |
+|---|---|
+| `office` | Employee is physically present at the office |
+| `wfh` | Employee is working from home |
+
+The `work_mode` field is recorded on the session and influences reporting filters — it does **not** change session classification or flag logic.
+
+## Check-In Flow
+
+<Steps>
+  <Step title="Employee triggers check-in">
+    The employee selects a work mode and submits the request. The system captures `check_in_at` at the precise instant the request is processed.
+  </Step>
+  <Step title="Active-session guard">
+    If the employee already has a session in status `active`, the API rejects the request. **Only one active session is permitted per user at any time.**
+  </Step>
+  <Step title="Session created">
+    A new `AttendanceSession` record is written with `session_status = active`. The `is_late_login` flag is set to `true` if `check_in_at` (in PKT) is after 5:00 PM.
+  </Step>
+</Steps>
+
+### Example Check-In Request
+
+```http
+POST /api/v1/attendance/check-in
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "work_mode": "office"
+}
+```
+
+### Check-In Response Fields (selected)
+
+<ParamField body="id" type="UUID">
+  Unique session identifier (internal use only — not displayed in the UI).
+</ParamField>
+<ParamField body="user_full_name" type="string">
+  Human-readable name of the employee shown in all views.
+</ParamField>
+<ParamField body="work_mode" type="string">
+  `office` or `wfh` as declared at check-in time.
+</ParamField>
+<ParamField body="session_status" type="string">
+  `active`, `completed`, `incomplete`, or `corrected`.
+</ParamField>
+<ParamField body="is_late_login" type="boolean">
+  `true` when check-in occurred after the shift start time in PKT.
+</ParamField>
+<ParamField body="expected_shift_start_at" type="datetime (UTC ISO-8601)">
+  The expected start boundary for this session's shift, returned in UTC.
+</ParamField>
+
+## Check-Out Flow
+
+<Steps>
+  <Step title="Employee triggers check-out">
+    The employee submits the check-out request. An optional body can carry `early_checkout_reason` or after-shift justification fields.
+  </Step>
+  <Step title="Metrics calculated">
+    `check_out_at` is recorded. The system computes `worked_minutes`, `duration_minutes`, and `total_hours`. The `is_early_logout` flag is set if check-out is before 2:00 AM PKT.
+  </Step>
+  <Step title="Breaks auto-closed">
+    Any break with status `active` at the time of check-out is automatically closed with `ended_at = check_out_at`.
+  </Step>
+  <Step title="Session classified">
+    The system assigns an `attendance_classification` based on the rules in the table below, and sets `session_status = completed`.
+  </Step>
+</Steps>
+
+<Tip>
+If an employee is checking out **after** the shift end (e.g., past 2:00 AM PKT), the `checkout_after_shift_reason` and `checkout_after_shift_note` fields should be supplied in the request body to provide an audit trail.
+</Tip>
+
+### Checkout Request Body (optional fields)
+
+<ParamField body="checkout_after_shift_reason" type="string | null">
+  Short reason code for post-shift checkout (e.g., `overtime`, `forgot_checkout`).
+</ParamField>
+<ParamField body="checkout_after_shift_note" type="string | null">
+  Free-text note elaborating on why the session ran past shift end.
+</ParamField>
+<ParamField body="early_checkout_reason" type="string | null">
+  Reason when checking out before the shift end time.
+</ParamField>
+
+## Session Classification
+
+After checkout the platform automatically assigns one of the following classifications to every session.
+
+| `attendance_classification` | Rule |
+|---|---|
+| `active` | Session is still open; employee has not checked out yet |
+| `full_day` | `worked_minutes` ≥ 540 (9 hours) |
+| `half_day` | `worked_minutes` ≥ 270 and < 540 (4.5 – 9 hours) |
+| `short_leave` | `worked_minutes` < 270 (under 4.5 hours) |
+| `insufficient` | Duration recorded but falls below the half-day threshold |
+| `full_leave` / `leave` | No check-in, but an approved leave record covers the day |
+
+## Operational Flags
+
+| Flag | Condition |
+|---|---|
+| `is_late_login` | Check-in after shift start (5 PM PKT) |
+| `is_early_logout` | Check-out before shift end (2 AM PKT) |
+| `is_overtime` | Session duration significantly exceeds 9 hours |
+| `is_corrected` | Session was updated via an approved correction request |
+
+## Break Tracking
+
+Employees can log mid-session breaks without losing credit for paid work time. All breaks are classified as **paid** — break duration is not deducted from `worked_minutes`.
+
+### Break Types
+
+| `break_type` | Description |
+|---|---|
+| `dinner` | Standard meal break |
+| `prayer` | Daily prayer time |
+| `other` | Coffee, rest, or any miscellaneous short break |
+
+### Break Rules
+
+- A break can only be started while an `active` attendance session exists.
+- Only **one active break** is allowed at a time. Starting a second break while one is open is rejected.
+- If the employee checks out while a break is still active, the system sets `ended_at = check_out_at` automatically.
+- Break durations are stored on the session in dedicated columns: `dinner_break_minutes`, `prayer_break_minutes`, and `other_break_minutes`.
+
+### Break Endpoints
+
+<Tabs>
+  <Tab title="Start Break">
+    ```http
+    POST /api/v1/attendance/breaks/start
+    Authorization: Bearer <token>
+    Content-Type: application/json
+
+    {
+      "break_type": "dinner",
+      "note": "Heading to the cafeteria"
+    }
+    ```
+  </Tab>
+  <Tab title="End Break">
+    ```http
+    POST /api/v1/attendance/breaks/end
+    Authorization: Bearer <token>
+    ```
+  </Tab>
+  <Tab title="Current Break">
+    ```http
+    GET /api/v1/attendance/breaks/current
+    Authorization: Bearer <token>
+    ```
+  </Tab>
+  <Tab title="Session Breaks">
+    ```http
+    GET /api/v1/attendance/sessions/{session_id}/breaks
+    Authorization: Bearer <token>
+    ```
+  </Tab>
+</Tabs>
+
+### Break Response Fields
+
+<ParamField body="break_type" type="string">
+  `dinner`, `prayer`, or `other`.
+</ParamField>
+<ParamField body="started_at" type="datetime (UTC ISO-8601)">
+  Timestamp when the break began.
+</ParamField>
+<ParamField body="ended_at" type="datetime | null">
+  Timestamp when the break ended. `null` if the break is still active.
+</ParamField>
+<ParamField body="duration_minutes" type="integer | null">
+  Calculated on break completion. `null` while the break is in progress.
+</ParamField>
+<ParamField body="is_paid" type="boolean">
+  Always `true` — all recorded breaks count as paid time.
+</ParamField>
+
+## Auto-Close and Incomplete Sessions
+
+<Warning>
+If a session remains in `active` status for more than **24 hours**, the system automatically marks it as `incomplete` and raises an alert. This safeguard handles forgotten checkouts and prevents stale active sessions from corrupting daily metrics.
+</Warning>
+
+The `incomplete` status signals that the session could not be classified normally and requires either a manual correction or manager intervention.
+
+## Attendance Correction Flow
+
+Employees occasionally forget to check out or check in with the wrong timestamp. The correction workflow provides a structured, auditable remedy.
+
+<Steps>
+  <Step title="Employee submits correction request">
+    `PATCH /api/v1/attendance/{session_id}/correction-request` with `requested_check_in_at`, `requested_check_out_at`, and a mandatory `reason`. The session flag `correction_requested` is set to `true`.
+  </Step>
+  <Step title="Manager reviews pending corrections">
+    `GET /api/v1/attendance/corrections/pending` returns all sessions in the manager's team scope that have pending correction requests.
+  </Step>
+  <Step title="Manager resolves the correction">
+    `PATCH /api/v1/attendance/{session_id}/resolve-correction` with an `action` of `approve`, `reject`, or `clarify`. On approval, the system applies the corrected timestamps and recalculates all metrics from scratch.
+  </Step>
+  <Step title="Session updated">
+    The session `is_corrected` flag is set to `true` and `session_status` transitions to `corrected`.
+  </Step>
+</Steps>
+
+### Correction Request Fields
+
+<ParamField body="requested_check_in_at" type="datetime | null">
+  The corrected check-in timestamp the employee is requesting (UTC).
+</ParamField>
+<ParamField body="requested_check_out_at" type="datetime | null">
+  The corrected check-out timestamp the employee is requesting (UTC).
+</ParamField>
+<ParamField body="reason" type="string" required>
+  Mandatory human-readable explanation for the correction.
+</ParamField>
+
+### Correction Resolve Fields
+
+<ParamField body="action" type="string" required>
+  One of `approve`, `reject`, or `clarify`.
+</ParamField>
+<ParamField body="check_in_at" type="datetime | null">
+  Manager-confirmed corrected check-in (may differ from the employee's request).
+</ParamField>
+<ParamField body="check_out_at" type="datetime | null">
+  Manager-confirmed corrected check-out.
+</ParamField>
+<ParamField body="manager_comment" type="string | null">
+  Optional comment explaining the decision.
+</ParamField>
+
+## Role-Based Access Summary
+
+| Endpoint | Employee | Manager / Team Lead | Admin / HR Ops |
+|---|---|---|---|
+| `POST /check-in` | ✅ Own session | ✅ | ✅ |
+| `POST /check-out` | ✅ Own session | ✅ | ✅ |
+| `GET /me` | ✅ Own history | ✅ | ✅ |
+| `GET /team` | ❌ | ✅ Team scope | ✅ All |
+| `PATCH /{id}/correction-request` | ✅ Own session | ✅ | ✅ |
+| `GET /corrections/pending` | ❌ | ✅ Team scope | ✅ All |
+| `PATCH /{id}/resolve-correction` | ❌ | ✅ Team scope | ✅ All |
+
+## Overnight Session Handling
+
+<Info>
+The standard shift crosses midnight: it starts at 5:00 PM on day N and ends at 2:00 AM on day N+1. The system correctly attributes a 1:30 AM check-out to the session that opened at 5:00 PM the previous calendar day, so daily summaries are never split across two date buckets incorrectly.
+</Info>

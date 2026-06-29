@@ -1,0 +1,240 @@
+---
+title: "System Alerts, Audit Logs, and Announcements"
+sidebarTitle: "Alerts & Audit"
+description: "Reference for automated system alerts, their severity levels and resolution flow, the immutable audit log trail, and org-wide announcement broadcasting."
+---
+
+The governance layer of the platform ensures that every critical operational exception is surfaced as an alert, every sensitive action is permanently recorded in the audit log, and every important broadcast reaches the right audience through announcements. Together these three systems provide the accountability and visibility that HR and compliance teams depend on.
+
+---
+
+## System Alerts
+
+Alerts are generated automatically by background Celery tasks that continuously monitor for operational exceptions across attendance, tasks, and approvals. They are never created manually.
+
+### Alert Types
+
+| Alert Type | Trigger Condition |
+|---|---|
+| `missing_checkout` | Employee has an open attendance session beyond the allowed buffer without checking out |
+| `overdue_task` | A task has passed its `due_date` without reaching `COMPLETED` or `REVIEWED` status |
+| `idle_after_checkin` | Check-in recorded but no timer or task activity detected for several hours |
+| `approval_delay` | A project or leave request has been pending for longer than the configured threshold |
+| `workload_overload` | An employee is assigned tasks that exceed their capacity threshold |
+
+### Severity Levels
+
+Alerts carry one of four severity levels that determine urgency and routing:
+
+<CardGroup cols={4}>
+  <Card title="Low" icon="circle-info">
+    Informational. No immediate action required — typically advisory notices.
+  </Card>
+  <Card title="Medium" icon="triangle-exclamation">
+    Requires attention soon. Overdue tasks and approval delays typically fall here.
+  </Card>
+  <Card title="High" icon="circle-exclamation">
+    Needs prompt action. Persistent missing checkouts or idle-after-checkin conditions.
+  </Card>
+  <Card title="Critical" icon="circle-xmark">
+    Immediate escalation required. Used for workload overload or patterns flagged for anomaly detection.
+  </Card>
+</CardGroup>
+
+### Alert Statuses
+
+An alert moves through these states during its lifecycle:
+
+| Status | Meaning |
+|---|---|
+| `OPEN` | Active exception, not yet actioned |
+| `RESOLVED` | Actor confirmed the issue has been addressed |
+| `DISMISSED` | Alert acknowledged and ignored |
+
+### Alert API
+
+```http
+GET   /alerts                        # All alerts for the current user (latest 100)
+PATCH /alerts/{alert_id}/resolve     # Mark an alert as resolved
+```
+
+The `GET /alerts` endpoint returns alerts scoped to the `recipient_user_id` of the authenticated user, ordered by `created_at` descending. A manager or admin receives alerts targeted at them — for example, a `missing_checkout` alert for one of their direct reports is delivered to the manager's recipient feed.
+
+Resolving an alert sets `status = RESOLVED` and records `resolved_at`. Only the alert's recipient can resolve it.
+
+```json
+// Example AlertRead response
+{
+  "id": "uuid",
+  "alert_type": "missing_checkout",
+  "severity": "medium",
+  "status": "open",
+  "recipient_user_id": "uuid",
+  "created_at": "2025-01-15T14:30:00Z",
+  "resolved_at": null
+}
+```
+
+<Note>
+  All alert timestamps are displayed in **PKT (Asia/Karachi)** in the frontend, even though the API stores and returns UTC values.
+</Note>
+
+### Email Delivery
+
+When a qualifying alert is generated, the Celery worker sends an email notification to the relevant Manager or Admin. Email delivery is tied to the worker job that creates the alert — there is no separate scheduling step.
+
+<Warning>
+  **Email deduplication:** Some alert types may trigger multiple email notifications if the underlying condition persists across consecutive worker runs. Cooldown logic for repeat-alert suppression is currently being refined.
+</Warning>
+
+### Implementation Status
+
+<Info>
+  Basic attendance exception alerts (`missing_checkout`, `overdue_task`) are fully implemented. Advanced anomaly detection alerts (e.g., suspicious logging patterns) are partially implemented and continue to be expanded.
+</Info>
+
+---
+
+## Audit Logs
+
+The audit log is an immutable, append-only record of every sensitive action taken in the system. It is the authoritative trail for compliance, dispute resolution, and security reviews.
+
+### What Is Tracked
+
+| Category | Actions Logged |
+|---|---|
+| **User Management** | Account creation, status changes (suspension / activation), role changes |
+| **Governance** | Project approval / rejection, leave request approval / rejection (includes decision, reason, and actor) |
+| **Manual Edits** | Any manual edits to attendance sessions or time logs |
+| **Security** | Admin bootstrap events, permission seeding |
+| **Call Recordings** | Recording uploaded, viewed, downloaded, deleted (recorded by `call_recordings.py`) |
+
+### Audit Log Data Structure
+
+Each `AuditLog` record captures:
+
+| Field | Description |
+|---|---|
+| `actor_user_id` | The user who performed the action |
+| `action_type` | Machine-readable event name (e.g., `user_status_changed`, `call_recording_downloaded`) |
+| `entity_type` | The type of object affected (e.g., `user`, `leave_request`, `call_recording`) |
+| `entity_id` | UUID of the affected object |
+| `old_value` | JSON snapshot of the state before the change |
+| `new_value` | JSON snapshot of the state after the change |
+| `created_at` | UTC timestamp of the event |
+
+### Immutability
+
+<Warning>
+  Audit logs are **read-only**. No endpoint exists to update or delete an audit log entry. This constraint is enforced at the API layer — even Admin users cannot modify the audit trail. Deleted related entities (e.g., a project that is subsequently deleted) are preserved as string references within the `old_value` / `new_value` JSON, so the log remains meaningful even when the source record no longer exists.
+</Warning>
+
+### Viewing Audit Logs
+
+```http
+GET /audit-logs     # Returns latest 200 entries, ordered by created_at DESC
+```
+
+This endpoint is **Admin-only**. Any other role receives HTTP 403.
+
+```python
+# From audit_logs.py
+if actor.role != UserRole.ADMIN:
+    raise HTTPException(status_code=403, detail="Only admins can view audit logs")
+```
+
+<Tip>
+  The `old_value` and `new_value` fields contain raw JSON objects. A user-friendly "Changed X from Y to Z" formatter is planned for a future release. For now, Admin tooling should parse and display these JSON blobs directly.
+</Tip>
+
+---
+
+## Announcements
+
+Announcements are the platform's internal broadcast system. They allow Admins and HR Operations to communicate policy changes, holiday notices, and other updates to precisely targeted segments of the workforce.
+
+### Creating an Announcement
+
+Only users with the `ADMIN` or `HR_OPERATIONS` role can create or modify announcements.
+
+```http
+POST /announcements
+```
+
+```json
+{
+  "title": "Q1 2025 Review Schedule",
+  "content": "Performance reviews will take place between January 20–31...",
+  "audience": "employee",
+  "start_date": "2025-01-20",
+  "end_date": "2025-01-31",
+  "is_active": true
+}
+```
+
+### Audience Targeting
+
+The `audience` field controls which users see the announcement. It is normalized to lowercase and validated against a fixed set:
+
+| Value | Targets |
+|---|---|
+| `all` | Every active user |
+| `employee` | Users with the `employee` role |
+| `manager` | Users with the `manager` role |
+| `admin` | Admin users |
+| `hr_operations` | HR Operations users |
+| `team_lead` | Team leads |
+| `intern` | Interns |
+| `junior_employee` | Junior employees |
+
+Passing an unrecognized audience value returns HTTP 422 with the list of allowed values.
+
+### Announcement Lifecycle
+
+```
+draft ──► active (is_active=true, within start/end dates) ──► archived
+```
+
+An announcement becomes visible to targeted users when `is_active` is `true` and the current date falls within `[start_date, end_date]`. Setting `is_active` to `false` via a PATCH request effectively archives it.
+
+When a new active announcement is created, a `announcement_created` WebSocket event is broadcast to all targeted users in real time.
+
+### Announcement Endpoints
+
+```http
+POST   /announcements                  # Create announcement (Admin / HR only)
+GET    /announcements                  # List announcements visible to current user
+GET    /announcements/visible          # Dashboard widget view (default limit: 5)
+GET    /announcements/all              # All announcements, any status (Admin / HR only)
+PATCH  /announcements/{id}             # Update title, content, audience, dates, or active status
+```
+
+```http
+# Dashboard widget — returns up to 5 active announcements for the current user
+GET /announcements/visible?limit=5&include_expired=false
+```
+
+### Null-Safe Display
+
+All announcement display logic handles missing related data gracefully. If a referenced user account is deleted after the announcement was created, the announcement continues to display using the stored string values rather than failing to render.
+
+---
+
+## Operational Requirements
+
+These cross-cutting rules apply to all three systems:
+
+<CardGroup cols={2}>
+  <Card title="No Raw IDs" icon="id-badge">
+    User-facing lists must display human-readable labels — full names, project titles, department names — rather than raw UUIDs. Backend responses are designed to include these resolved labels.
+  </Card>
+  <Card title="PKT Timestamps" icon="clock">
+    All alert, audit log, and announcement timestamps are stored in UTC and converted to **Asia/Karachi (PKT)** for display in the frontend.
+  </Card>
+  <Card title="Null-Safe Processing" icon="shield-check">
+    Alert and audit log rendering must handle deleted or missing related entities gracefully — showing the last-known name or ID string rather than crashing.
+  </Card>
+  <Card title="Admin-Only Audit Access" icon="lock">
+    The audit log endpoint enforces Admin-only access at the route level. Future releases may expand scoped read access to Managers for their own team's logs.
+  </Card>
+</CardGroup>
